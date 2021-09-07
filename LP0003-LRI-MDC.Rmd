@@ -1,0 +1,623 @@
+---
+title: "LP-0003 MDC"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+Aim: 
+1. Work out area of properties within each area classes
+
+# Libraries
+
+```{r}
+
+library(sf)
+library(tidyverse)
+library(cowplot)
+
+```
+
+
+### LUCA style 
+
+```{r}
+
+luca_style <- function(g, option=""){
+  
+  g = g + theme_minimal()
+  g = g + theme(panel.grid = element_blank())
+  g = g + theme(panel.grid.major.x = element_line(color = "darkgrey"))
+  
+  if (option=="MNM"){g = g + scale_fill_manual(berl_pal[c(1,2)])}
+  
+  
+  return(g)
+}
+
+
+```
+
+# hbar_stack function
+
+```{r}
+
+hbar_stack = function(D, X, Y, FILL, hori_title="Y", vert_title = "X", pal = NULL, facet = NULL, leg_title = NULL, POS="stack"){
+  
+  g = ggplot(D, aes_string(X, Y, fill = FILL)) + geom_bar(stat = "identity", position = POS)
+  
+  if (!is.null(facet)){
+    g = g + facet_grid(facet)
+  }
+  
+  g = g+ labs(y = hori_title, x = vert_title)
+  
+  g = g + coord_flip()
+  
+  if (!is.null(pal) & !is.null(leg_title)){
+    g = g + scale_fill_manual(name = leg_title, values = pal)
+  }
+  
+  
+  
+  g = berl_style(g)
+  
+  
+  g = g + guides(fill = guide_legend(reverse = TRUE))
+  
+  
+  return(g)
+  
+}
+
+```
+
+
+# Directory of Files
+
+```{r}
+
+fin_LRI = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-06-LP0003-MDCpolicyHPLs32report/GIS/Layers/LRI_MDC - Copy.shp"
+
+fin_VAL = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-06-LP0003-MDCpolicyHPLs32report/GIS/Shapefiles/Valuations.shp"
+
+
+fin_VAL_QV = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-06-LP0003-MDCpolicyHPLs32report/GIS/Shapefiles/Valuation-QV.shp"
+
+file.exists(fin_VAL_QV)
+
+
+
+plotdir = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-06-LP0003-MDCpolicyHPLs32report/GIS/Output/plots/"
+
+
+tabledir = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-06-LP0003-MDCpolicyHPLs32report/GIS/Tables/"
+
+file.exists(fin)
+```
+
+
+# 
+# Palettes and Orders
+
+```{r}
+
+rgb2hex <- function(r,g,b) rgb(r, g, b, maxColorValue = 255)
+
+VL_HPL_Palette_ffn = paste0("D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-06-LP0003-MDCpolicyHPLs32report/GIS/Tables/VL_HPL_palette.csv")
+
+VL_HPL_Palette = read_csv(VL_HPL_Palette_ffn) %>% mutate(pal = rgb2hex(R,G,B))
+
+VL_HPL_pal = VL_HPL_Palette %>% pull(pal)
+
+
+
+```
+
+```{r}
+
+
+AreaCats = rev(c(1000,500,300,100,80,50,30,10,4,.5))
+
+AreaCats
+
+AreaCats_Labels = paste0("< ", AreaCats[1], " ha")
+
+for (i in 1:(length(AreaCats)-1)){
+  
+  AreaCats_Labels = c(AreaCats_Labels, paste0(AreaCats[i], " to ", AreaCats[i+1], " ha"))
+                      
+}
+
+AreaCats_Labels = c(AreaCats_Labels, paste0("> ", tail(AreaCats,1)," ha"))
+
+
+```
+
+# Creating the Area Classes
+
+```{r}
+
+D_LRI = st_read(fin_LRI)
+D_VAL = st_read(fin_VAL)
+
+names(D_LRI)
+
+D_LRI_f = D_LRI %>% 
+  select(NILRI3 , VL = `VL...SBH`) 
+
+
+D_LRI_f %>% st_set_geometry(NULL) %>% select(VL) %>% distinct()
+
+D_VAL_f = D_VAL %>% 
+  select(Valn_Ref) %>% 
+   mutate(Lot_Area_ha = as.numeric(st_area(.))/1e4)
+
+
+D_LRIxVAL = D_VAL_f %>% 
+  st_intersection(D_LRI_f) %>% 
+  mutate(Intersected_polygon_Area_ha = as.numeric(st_area(.))/1e4)
+
+# D_LRIxVAL_grp = D_LRIxVAL %>% 
+#   group_by(Valn_Ref) %>% 
+#   dplyr::summarise(Intersected_polygon_Area_ha  = sum(Intersected_polygon_Area_ha ),
+#                    Lot_Area_ha  = first(Lot_Area_ha ))
+
+
+
+D_LRIxVAL_with_areaclasses = D_LRIxVAL %>% 
+   mutate(
+    AREA_DEF = Lot_Area_ha,
+    Area_Bracket = case_when(
+    AREA_DEF < AreaCats[1] ~ AreaCats_Labels[1],
+    AREA_DEF >= AreaCats[1] & AREA_DEF < AreaCats[2] ~ AreaCats_Labels[2],
+    AREA_DEF >= AreaCats[2] & AREA_DEF < AreaCats[3] ~ AreaCats_Labels[3],
+    AREA_DEF >= AreaCats[3] & AREA_DEF < AreaCats[4] ~ AreaCats_Labels[4],
+    AREA_DEF >= AreaCats[4] & AREA_DEF < AreaCats[5] ~ AreaCats_Labels[5],
+    AREA_DEF >= AreaCats[5] & AREA_DEF < AreaCats[6] ~ AreaCats_Labels[6],
+    AREA_DEF >= AreaCats[6] & AREA_DEF < AreaCats[7] ~ AreaCats_Labels[7],
+    AREA_DEF >= AreaCats[7] & AREA_DEF < AreaCats[8] ~ AreaCats_Labels[8],
+    AREA_DEF >= AreaCats[8] & AREA_DEF < AreaCats[9] ~ AreaCats_Labels[9],
+    AREA_DEF >= AreaCats[9] & AREA_DEF < AreaCats[10] ~ AreaCats_Labels[10],
+    AREA_DEF >= AreaCats[10]  ~ AreaCats_Labels[11])    ) 
+
+```
+
+
+#Calculations based on Area Clasees
+
+```{r}
+
+D_LRIxVAL_grp = D_LRIxVAL_with_areaclasses %>% 
+  group_by(Area_Bracket, VL) %>% 
+  summarise(AREA_VLxAreaBracket_sum = sum(Intersected_polygon_Area_ha))
+
+
+D_LRIxVAL_grp_smy = D_LRIxVAL_grp %>% 
+  ungroup() %>% 
+  group_by(Area_Bracket) %>% 
+  mutate(Area_Percent = 100 * AREA_VLxAreaBracket_sum/sum(AREA_VLxAreaBracket_sum))
+
+Property_Areas = D_LRIxVAL_grp_smy %>% 
+  ungroup() %>% 
+  group_by(Area_Bracket) %>% 
+  summarise(Total_Area = sum(AREA_VLxAreaBracket_sum)) %>% 
+  st_set_geometry(NULL)
+  
+
+VL_order = c("ELITE", "VL", "VL, NOT HPL","NOT VL, HPL","NOT VL, NOT HPL")
+# VL_palette = c("red",
+
+D_LRIxVAL_grp_smy$VL = factor(D_LRIxVAL_grp_smy$VL, levels = VL_order)
+D_LRIxVAL_grp_smy$Area_Bracket = factor(D_LRIxVAL_grp_smy$Area_Bracket, levels = AreaCats_Labels)
+   
+```
+
+# Read and Munge the valuation Data
+
+```{r}
+
+D_VAL_QV = st_read(fin_VAL_QV)
+
+D_VAL_QV_ng = as_tibble(D_VAL_QV %>% st_set_geometry(NULL))
+
+D_LRIxVAL_ng = as_tibble(D_LRIxVAL_with_areaclasses %>% st_set_geometry(NULL))
+
+
+D_LRIxVAL_QV_ng = D_LRIxVAL_ng %>% 
+  left_join(D_VAL_QV_ng, by = "Valn_Ref")  %>% 
+  mutate(Land.Value = str_replace_all(Land.Value,",","") )%>% 
+  mutate(VAL_PER_HA = as.numeric(Land.Value)/as.numeric(Land.Area))
+
+
+landuses = unique(D_LRIxVAL_QV_ng$Land.Use.D)
+landuses_filt = landuses[c(1,3,5,9,11,21,33,35,2,4,12,14,24,36)]
+
+
+D_LRIxVAL_QV_ng_filt = D_LRIxVAL_QV_ng %>% 
+  filter(Land.Use.D %in% landuses_filt)
+
+median_value_all_land = D_LRIxVAL_QV_ng %>% 
+  group_by(VL) %>% 
+  summarise(Median_Val_per_ha = median(VAL_PER_HA, na.rm = T))
+
+
+median_value_no_town= D_LRIxVAL_QV_ng_filt %>% 
+  group_by(VL) %>% 
+  summarise(Median_Val_per_ha = median(VAL_PER_HA, na.rm = T))
+
+
+median_value_by_LandType = median_value_all_land %>% left_join(median_value_no_town, by = "VL")
+
+names(median_value_by_LC) = c("Land Type","Towns Included", "Towns Excluded")
+
+write.csv(median_value_by_LandType,paste0(tabledir, "median_value_by_LandType.csv"))
+
+
+head(D_LRIxVAL_QV_ng$VAL_PER_HA)
+
+D_LRIxVAL_QV_ng$VAL_PER_HA
+names(D_LRIxVAL_QV_ng)
+
+```
+
+
+# Fig 1. Horizontal Bar Plot - Proportion of Land Type in each Area Class
+
+```{r}
+
+fignum = 1
+figdesc = "MDC_LandTypeAreas"
+figfmt = ".png"
+
+
+
+g = ggplot(D_LRIxVAL_grp_smy, aes(Area_Bracket, Area_Percent, fill = VL)) + geom_bar(stat = "identity")
+g = g + labs(y = "Proportion (%)", x = "Area Range (ha)")
+g = g + coord_flip()
+g = g + scale_fill_manual(name = "Land Type", values = VL_HPL_pal)
+g = g + theme_minimal()
+g = g + theme(panel.grid = element_blank())
+g
+
+   
+    
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+ggsave(fig_ffn,g, height = 6, width = 10)
+
+
+```
+
+# Fig 2. Combined Bar Plot of Total Area & Proportions
+
+```{r}
+
+fignum = 2
+figdesc = "MDC_TotalArea_and_LandTypeAreas"
+figfmt = ".png"
+
+
+# g = g + theme(legend.position = "inside")
+
+g2 = ggplot(Property_Areas, aes(Area_Bracket, Total_Area)) + geom_bar(stat = "identity")
+g2 =g2 +  labs(y = "Total Area (ha)", x = "Area Class (ha)")
+g2 = g2 + coord_flip()
+
+g2 = g2 + theme_minimal()
+g2 = g2 + theme(panel.grid = element_blank())
+g = g + theme(axis.title.y = element_blank())
+g = g + theme(axis.text.y = element_blank())
+  
+g_cmb = plot_grid(g2,g, nrow=1)
+g_cmb   
+    
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+ggsave(fig_ffn,g_cmb, height = 6, width = 10)
+
+
+```
+
+# Fig 3. Faceted Plot of Total Areas vs Area Class faceted by Land Type
+
+```{r}
+
+
+fignum = 3
+figdesc = "MDC_TotalArea_LandTypeAreas_faceted_All_AreaClasses"
+figfmt = ".png"
+
+
+
+g = ggplot(D_LRIxVAL_grp_smy, aes(Area_Bracket , AREA_VLxAreaBracket_sum)) + geom_bar(stat = "identity", aes(fill = VL)) + facet_wrap(~VL)
+g = g + labs(y = "Total Area in Manawatu District (ha)", x = "Area Class (ha)")
+
+g = g + scale_fill_manual(name = "Land Type", values = VL_HPL_pal)
+g = g + coord_flip()
+g = g + theme_minimal()
+g = luca_style(g)
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+ggsave(fig_ffn,g, height = 6, width = 10)
+
+
+```
+
+# Fig 4. As above but filtered for 0 to 100 ha
+
+```{r}
+
+
+fignum = 4
+figdesc = "MDC_TotalArea_LandTypeAreas_faceted_selected_AreaClasses"
+figfmt = ".png"
+
+
+Area_Brackets = unique(D_LRIxVAL_grp_smy$Area_Bracket)
+# classes2keep = Area_Brackets[c()]
+
+
+D_LRIxVAL_grp_smy_sel = D_LRIxVAL_grp_smy %>% 
+  st_set_geometry(NULL) %>% 
+  filter(
+    (grepl("<", Area_Bracket )) |
+    (grepl("0.5 to 4 ha", Area_Bracket )) |
+      (grepl("4 to 10 ha", Area_Bracket )) |
+      (grepl("10 to 30 ha", Area_Bracket )) |
+      (grepl("30 to 50 ha", Area_Bracket )) |
+      (grepl("50 to 80 ha", Area_Bracket )) |
+      (grepl("80 to 100 ha", Area_Bracket )) 
+      
+    )
+
+unique(D_LRIxVAL_grp_smy_sel$Area_Bracket)
+
+
+g = ggplot(D_LRIxVAL_grp_smy_sel, aes(Area_Bracket , AREA_VLxAreaBracket_sum)) + geom_bar(stat = "identity", aes(fill = VL)) + facet_wrap(~VL)
+g = g + labs(y = "Total Area in Manawatu District (ha)", x = "Area Class (ha)")
+
+g = g + scale_fill_manual(name = "Land Type", values = VL_HPL_pal)
+g = g + coord_flip()
+g = g + theme_minimal()
+g = luca_style(g)
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+ggsave(fig_ffn,g, height = 6, width = 10)
+
+
+```
+
+# Figure 5. Single Bar showing total area of different Land Types
+
+```{r}
+
+
+fignum = 5
+figdesc = "MDC_TotalArea_Lnot_split_by_area_AreaClasses"
+figfmt = ".png"
+
+
+D_LRIxVAL_grp_smy_ALL = D_LRIxVAL_grp_smy %>% st_set_geometry(NULL) %>% 
+  ungroup() %>% 
+  group_by(VL) %>% 
+  summarise(TOTAL_AREA = sum(AREA_VLxAreaBracket_sum))
+
+D_LRIxVAL_grp_smy_ALL$CAT = 1
+
+
+g = ggplot(D_LRIxVAL_grp_smy_ALL, aes(x = CAT,y=TOTAL_AREA, fill = VL)) + geom_bar(stat = "identity", width = .2,aes(fill = VL)) 
+
+g = g + coord_flip(xlim = c(0.5,1.5), clip = "on")
+g = g + scale_fill_manual(name = "Land Type", values = VL_HPL_pal)
+# g = g + 
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+ggsave(fig_ffn,g, height = 6, width = 10)
+
+
+```
+
+# Figure 6. Scatterplot of Land Value per ha by Parcel Size faceted by Land Type
+
+```{r}
+
+
+fignum = 6
+figdesc = "MDC_Median_value_per_ha_by_AreaClass"
+figfmt = ".png"
+
+D_LRIxVAL_QV_ng_filt_by_area = D_LRIxVAL_QV_ng %>% 
+  mutate(Land.Value.cln = as.numeric(Land.Value)) %>% 
+  filter(AREA_DEF<2.5e4)
+  
+
+# ggplot(D_LRIxVAL_QV_ng_filt, aes(AREA_DEF , Land.Value.cln)) + geom_point(aes(color = VL ))
+
+D_LRIxVAL_QV_ng_filt_by_area$VL = factor(D_LRIxVAL_QV_ng_filt_by_area$VL, levels = VL_order)
+
+
+g = ggplot(D_LRIxVAL_QV_ng_filt_by_area, aes(AREA_DEF , VAL_PER_HA )) + geom_point(aes(color = VL)) + facet_wrap(~VL) + xlim(c(.4,30)) + ylim(c(0,1e6))
+
+g = g + labs(x = "Valuation Parcel Area (ha)", y = "Land value ($ per ha)")
+g = g + scale_color_manual(name = "Land Type",values=VL_HPL_pal)
+g 
+# g = luca_style(g)
+
+g = g + theme_minimal()
+g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+ggsave(fig_ffn,g)
+
+
+```
+
+
+
+
+
+
+```{r}
+
+D_LRIxVAL_ffout = paste0(dirname(fin_LRI), "/D_LRIxVAL.shp")
+
+st_write(D_LRIxVAL,D_LRIxVAL_ffout, append = F)
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+Dsh= st_read(fin) 
+  
+Dsh = Dsh %>% 
+  mutate(AREA_DEF = as.numeric(st_area(Dsh))/1e4) %>% 
+  # filter(!is.na(NILRI3)) %>% 
+  mutate(
+    Area_Bracket = case_when(
+    AREA_DEF < AreaCats[1] ~ AreaCats_Labels[1],
+    AREA_DEF >= AreaCats[1] & AREA_DEF < AreaCats[2] ~ AreaCats_Labels[2],
+    AREA_DEF >= AreaCats[2] & AREA_DEF < AreaCats[3] ~ AreaCats_Labels[3],
+    AREA_DEF >= AreaCats[3] & AREA_DEF < AreaCats[4] ~ AreaCats_Labels[4],
+    AREA_DEF >= AreaCats[4] & AREA_DEF < AreaCats[5] ~ AreaCats_Labels[5],
+    AREA_DEF >= AreaCats[5] & AREA_DEF < AreaCats[6] ~ AreaCats_Labels[6],
+    AREA_DEF >= AreaCats[6] & AREA_DEF < AreaCats[7] ~ AreaCats_Labels[7],
+    AREA_DEF >= AreaCats[7] & AREA_DEF < AreaCats[8] ~ AreaCats_Labels[8],
+    AREA_DEF >= AreaCats[8] & AREA_DEF < AreaCats[9] ~ AreaCats_Labels[9],
+    AREA_DEF >= AreaCats[9] & AREA_DEF < AreaCats[10] ~ AreaCats_Labels[10],
+    AREA_DEF >= AreaCats[10]  ~ AreaCats_Labels[11])    )
+
+
+
+
+Dsh$Area_Bracket = factor(Dsh$Area_Bracket, levels = AreaCats_Labels)
+ggplot(Dsh) + geom_sf(aes(fill = Area_Bracket))
+
+#remove geometry
+D = as.tibble(Dsh %>% st_set_geometry(NULL) )
+
+D_smy = D %>% 
+  group_by(Area_Bracket) %>% 
+  summarise(Total_Area = sum(AREA_DEF))
+
+
+D %>% filter(is.na(AREA_DEF))
+
+D_bin = D %>% group_by(group = cut(AREA_DEF, breaks = seq(0, 30000, 100)))
+
+D_bin %>% filter(is.na(group))
+
+D_bin_smy  = D_bin %>% 
+  summarise(n = sum(AREA_DEF),
+            c  = length(AREA_DEF),
+            medArea = median(AREA_DEF))
+
+H = names(D)
+H
+max(AREA_DEF)
+
+  
+
+
+
+
+
+
+```
+
+Figure 1. A histogram of Count of Property Areas 
+
+
+```{r}
+
+brk = seq(0,30000,100)
+
+g = ggplot(D_bin_smy, aes(x = group, y = c)) + geom_point()
+g = g + theme(axis.text.x = element_text(angle = 90))
+g
+ggplotly(g)
+```
+
+Figure 1. A histogram of Count of Property Areas 
+
+
+```{r}
+
+brk = seq(0,30000,100)
+
+g = ggplot(D, aes(x = AREA_DEF )) + geom_histogram(binwidth = 100, bins = 300)
+g
+p = gg
+
+library(plotly)
+
+g = g + scale_x_continuous(breaks = brk)
+g = g + xlim(x = c(0,3e4)) + ylim(c(0,7000))
+g = g + theme(axis.text.x = element_text(angle = 90))
+g
+
+
+
+```
+
+Figure 3. A histogram of Count of Property Areas 
+
+
+```{r}
+
+g = ggplot(Dsh, aes(x = Area_Bracket)) + geom_histogram(breaks = AreaCats, stat = "count")
+g = g + labs(x = "Property Area Bracket", y = "Number of Properties")
+g = g + theme(axis.text.x = element_text(angle = 90))
+g
+
+```
+
+Figure 4. Total Area of Properties within Each Property Area Bracket
+
+
+```{r}
+
+g = ggplot(D_smy, aes(x = Area_Bracket, y  = Total_Area)) + geom_bar(width = .8, stat = "identity")
+g = g + labs(x = "Property Area Bracket", y = "Total Area (ha)")
+g = g + theme(axis.text.x = element_text(angle = 90))
+g
+
+```
+
+```{r}
+
+
+fin2 = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-06-LP0003-MDCpolicyHPLs32report/GIS/Shapefiles/Intersect_copy.shp"
+
+D2 = st_read(fin2)
+
+
+names(D2)
+
+D2_group = D2 %>% .
+  group_by(VL_ii)
+
+
+
+
+
+```
+

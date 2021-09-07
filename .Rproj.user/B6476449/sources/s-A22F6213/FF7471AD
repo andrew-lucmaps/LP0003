@@ -1,0 +1,27 @@
+{
+    "id": "FF7471AD",
+    "path": "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/code/R/ML_GHG.Rmd",
+    "project_path": null,
+    "type": "r_markdown",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1630970706145.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "chunk_output_type": "console",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "284,64",
+        "scrollLine": "272"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1630027288,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1630027288,
+    "read_only": false,
+    "read_only_alternatives": []
+}

@@ -1,0 +1,1777 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+# Date Stamp 2 June 2021
+
+
+This project aims to work out the profile of GHG emissions and removals for Maori Land (compared to non-Maori)
+
+Start off by using the:
+(a) Maori Land Count Land Layer accessed from MOJ
+(b) The LRI Land Use Capability Layer from LRIS
+(c) The Land Cover Database (Version 5) from MWLR 
+
+
+1. Calculate the portion of each LUC Class and Sub Class on Maori Land
+
+1. (a) Subtract Urban Areas
+
+
+Make Pie Charts of the make up (in terms of LUC Class) MLC vs non-MLC
+
+
+
+
+
+
+
+
+
+The aim of this is to intersect Maori Land Blocks with LUC Classes
+
+
+#load libraries
+
+```{r Section-001}
+
+library(sf)
+library(tidyverse)
+library(mapview)
+
+library(RColorBrewer)
+
+library(tictoc)
+library(rmapshaper)
+
+
+# 
+# par(mar=c(3,4,2,2))
+# display.brewer.all()
+
+```
+
+### rgb2hex 
+
+```{r}
+
+rgb2hex <- function(r,g,b) rgb(r, g, b, maxColorValue = 255)
+
+
+```
+
+
+### function berl_style 
+
+```{r}
+
+berl_style <- function(g){
+  
+  g = g + theme_minimal()
+  g = g + theme(panel.grid.minor = element_blank())
+  g = g + theme(panel.grid.major.y = element_blank())
+  g = g + theme(panel.grid.major.x = element_line(color = "darkgrey"))
+  
+  
+  
+  
+}
+
+
+```
+
+
+## Function "validate_sh"
+
+```{r}
+
+
+validate_sh = function(shp){
+  
+  if (dim(shp)[1] !=0 ){
+    if (!st_is_valid(shp) ){
+      print("Making layer valid")
+      shp_val = st_make_valid(shp)
+    }else{
+      shp_val = shp} 
+  }else{
+    shp_val = shp
+  }
+  return(shp_val)
+}
+
+```
+
+# function cmb_and_val
+
+```{r}
+
+#combine and validate
+
+cmb_and_val = function(shp_in){
+  
+  
+  shp_cmb = st_combine(shp_in)
+  
+  shp_cmb_val = validate_sh(shp_cmb)
+  
+  return(shp_cmb_val)
+}
+
+
+```
+
+
+
+
+```{r}
+
+
+
+
+
+
+
+
+```
+
+#####----
+
+## Function "get_LUM_for_TA"
+
+
+####----
+
+This will intersect the ML with the TA and then the LUM. So for Maori Freehold Land in each TA will get the areas of each Land Use Type.
+
+
+```{r Section 0014}
+
+
+get_LUM_for_TA = function(TA_curr_name, TA, LUM, ML_combined_valid, CL_combined_valid, PA_combined_valid,LUCAS_KEY, output_folder){
+  
+  
+  TA_curr_name = TA_names[22]
+  
+  
+  print('-----------------------------------------------')
+  print(paste('Analysing TA ', TA_curr_name))
+  print('-----------------------------------------------')
+  
+  
+  dirout = paste0(output_folder,"TA layers/",TA_curr_name,"/")
+  
+  if (!dir.exists(dirout)){dir.create(dirout, recursive = T)}
+  
+  
+  # read the data
+  
+  
+  # print('Reading files ...')
+  # TA = st_read(TA_ffn)
+  # LUM = st_read(LUM_ffn)
+  # ML <- st_read(ML_ffn)         #  27212 features
+  
+  TA_names = TA %>%  pull(TA2019_V_1)
+  
+  #extract the current TA
+  TA_curr = TA %>% filter(str_detect(TA2019_V_1, TA_curr_name))
+  
+  # do the intersections
+  
+  #intersect Maori Land (ML) and Territorial Authorty (TA)
+  
+  print('Intersecting ML with TA  ...')
+  
+  
+  
+  
+  
+  MLxTA = st_intersection(TA_curr,ML_combined_valid)
+  MLxTA2 = st_collection_extract(MLxTA,"POLYGON")
+  
+  st_write(MLxTA2, paste0(dirout,"MLxTA.shp"), append = F)
+  
+  #intersect Non-Maori Land (NML) and Territorial Authorty (TA) (24 sec)
+  print('Intersecting NML with TA  ...')
+  
+  
+  
+  
+  NMLxTA = st_difference(TA_curr, ML_combined_valid)
+  
+  if (!st_is_valid(NMLxTA)){
+    print("Making NMLxTA valid")
+    NMLxTA_valid = st_make_valid(NMLxTA)
+  }else{
+    NMLxTA_valid = NMLxTA
+  }
+  
+  
+  #get the Crown Land for this Area
+  CLxTA = st_intersection(TA_curr, CL_combined_valid)
+  CLxTA2 = st_collection_extract(CLxTA,"POLYGON")
+  CLxTA2 = validate_sh(CLxTA2) 
+  
+  # get the protected Crown Land
+  
+  PAxTA = st_intersection(TA_curr, PA_combined_valid)
+  # PAxTA2 = st_collection_extract(PAxTA,"POLYGON")
+  PAxTA2 = validate_sh(PAxTA2)
+  
+  #combine the CL and PA
+  PA_CL_TA = st_union(PAxTA,CLxTA)
+  
+  #now subtract the crown
+  
+  NMLxTA_NO_CL = st_difference(NMLxTA, CLxTA2)
+  
+  NMLxTA_NO_CL2 = st_collection_extract(NMLxTA_NO_CL,"POLYGON")
+  NMLxTA_NO_CL3 = validate_sh(NMLxTA_NO_CL2)
+  
+  #now subtract the protected crown land
+  
+  st_is_valid(NMLxTA)
+  st_is_valid(PA_CL_TA)
+  
+  NMLxTA_NO_CL_NO_PA = st_difference(NMLxTA, PA_CL_TA)
+  NMLxTA_NO_CL_NO_PA2 = st_collection_extract(NMLxTA_NO_CL_NO_PA,"POLYGON")
+  NMLxTA_NO_CL_NO_PA3 = validate_sh(NMLxTA_NO_CL_NO_PA2)
+  
+  mapview(TA_curr)
+  mapview(NMLxTA)
+  mapview(CLxTA2)
+  mapview(PAxTA2)
+  
+  mapview(NMLxTA_NO_CL2)
+  mapview(NMLxTA_NO_CL_NO_PA)
+  
+  st_write(NMLxTA, paste0(dirout,"NMLxTA.shp"), append = F)
+  
+  
+  #intersect Maori Land (ML) x Territorial Authorty (TA) with LUM
+  print('Intersecting MLxTA with LUM  ...')
+  LUMxMLxTA = st_intersection(LUM, MLxTA2)
+  LUMxMLxTA2 <- st_collection_extract(LUMxMLxTA, "POLYGON")
+  
+  if (dim(LUMxMLxTA2)[1] > 0){st_write(LUMxMLxTA2, paste0(dirout,"LUMxMLxTA.shp"), append = F)}
+  
+  #intersect Non-Maori Land (ML) x Territorial Authorty (TA) with LUM (takes 7.4 minutes!)
+  # Produces 22830 Features
+  print('Intersecting NMLxTA with LUM  ...')
+  LUMxNMLxTA = st_intersection(LUM, NMLxTA)
+  LUMxNMLxTA2 <- st_collection_extract(LUMxNMLxTA, "POLYGON")
+  st_write(LUMxNMLxTA2, paste0(dirout,"LUMxNMLxTA.shp"), append = F)
+  
+  if (dim(LUMxNMLxTA2)[1] > 0){st_write(LUMxNMLxTA2, paste0(dirout,"LUMxMLxTA.shp"), append = F)}
+  
+  
+  # Questions
+  
+  # 1. How big is the TLA?
+  
+  
+  TA_Area_ha = unique(LUMxMLxTA$LAND_AREA_)*100
+  TA_Area_ha
+  # 731814 ha for "Far North District"
+  
+  # 2. Area of ML and NML?
+  
+  LUMxMLxTA = LUMxMLxTA %>% 
+    mutate(Polygon_Area_ha = as.numeric(st_area(LUMxMLxTA))/1e4)
+  
+  
+  TA_ML_Area_ha = sum(LUMxMLxTA$Polygon_Area_ha)
+  # 102388.3
+  
+  
+  LUMxNMLxTA = LUMxNMLxTA %>% 
+    mutate(Polygon_Area_ha = as.numeric(st_area(LUMxNMLxTA))/1e4)
+  
+  
+  TA_NML_Area_ha = sum(LUMxNMLxTA$Polygon_Area_ha)
+  # 566174.4
+  
+  SUM_ML_NML = TA_ML_Area_ha + TA_NML_Area_ha
+  SUM_ML_NML
+  # 668562.7
+  
+  # Percentage of ML
+  TA_ML_Area_ha/TA_Area_ha * 100
+  
+  # 14%
+  
+  # 3. How much post 1989 Forest?
+  
+  #print list of codes and names
+  LUMxMLxTA %>% 
+    distinct(LUCNA_2016, .keep_all = T) %>% 
+    select(LUCID_2016, LUCNA_2016) %>% 
+    mutate(LUC_ID_NA = paste(LUCID_2016, LUCNA_2016)) %>% 
+    pull(LUC_ID_NA)
+  
+  
+  
+  
+  #choose ID = 73
+  
+  Area_Post89 = LUMxMLxTA %>% 
+    st_set_geometry(NULL) %>% 
+    group_by(LUCID_2016) %>% 
+    summarise(
+      LUCNA_2016 = first(LUCNA_2016),
+      Area_ha = sum(Polygon_Area_ha))
+  
+  Area_Post89
+  
+  
+  #Drop the geometry and join the data together
+  
+  LUMxMLxTA = LUMxMLxTA %>% mutate(TITLE = "ML")
+  LUMxNMLxTA = LUMxNMLxTA %>% mutate(TITLE = "NML")
+  
+  LUMxTA_CMB = LUMxMLxTA %>% bind_rows(LUMxNMLxTA)
+  
+  LUMxTA_CMB_nogeo = LUMxTA_CMB %>% st_set_geometry(NULL)
+  
+  
+  print('Summarising data  ...')
+  
+  # browser()
+  
+  LUMxTA_CMB_nogeo_tmp = LUMxTA_CMB_nogeo %>% 
+    group_by(TITLE, LUCID_2016) %>% 
+    summarise(Area = sum(Polygon_Area_ha)) %>% 
+    spread(TITLE,Area) 
+  
+  '%!in%' <- function(x,y)!('%in%'(x,y))
+  
+  if ("ML" %!in% names(LUMxTA_CMB_nogeo_tmp)){
+    LUMxTA_CMB_nogeo_tmp=  LUMxTA_CMB_nogeo_tmp %>% 
+      mutate(ML=0)}
+  
+  
+  LUMxTA_CMB_nogeo_smy = LUMxTA_CMB_nogeo_tmp  %>%  
+    mutate(
+      ML_perc = ML/sum(ML, na.rm = T)*100,
+      NML_perc = NML/sum(NML, na.rm = T)*100
+    ) %>% 
+    left_join(LUCAS_KEY, by = "LUCID_2016")
+  
+  LUMxTA_CMB_nogeo_smy_lng = LUMxTA_CMB_nogeo_smy %>% 
+    gather(key,value, ML_perc, NML_perc, -LUCNA_2016) %>% 
+    mutate(`Title type` = ifelse(key=="ML_perc", "M\u101ori Freehold","General Title"))
+  
+  
+  LUCNA_order = LUCAS_KEY$LUCNA_2016[c(3,7,8,5,2,4,11,12,6,9,10,1)]
+  LUMxTA_CMB_nogeo_smy_lng$LUCNA_2016 = factor(LUMxTA_CMB_nogeo_smy_lng$LUCNA_2016, levels = rev(LUCNA_order))
+  
+  
+  print('Creating plot  ...')
+  g = ggplot(LUMxTA_CMB_nogeo_smy_lng, aes(LUCNA_2016,value, fill = `Title type`)) + geom_bar(stat = "identity", position = "dodge") + coord_flip()
+  
+  g = g + labs(x = "LUCAS Class", y = "Percentage of Area (within each Title type)")
+  g = g + ggtitle(TA_curr_name)
+  g = g + scale_fill_manual(values = berl_pal[c(9,1)])
+  g = berl_style(g)
+  
+  g
+  ggsave(g, filename = paste0(dirout,'LUM_type_PercArea.png'))
+  
+  print('Writing summary data to file  ...')
+  
+  write_csv(file = paste0(dirout, "LUMxTA_CMB_nogeo_smy.csv"),x =  LUMxTA_CMB_nogeo_smy)
+  
+  print(paste('Summary data written to file',paste0(dirout, "LUMxTA_CMB_nogeo_smy.csv")))
+  
+  
+  return(list(LUMxTA_CMB_nogeo_smy, g))
+  
+  
+}
+
+
+
+```
+
+
+# Set paths
+
+```{r Section-002}
+
+proj_folder = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/'
+
+datadir = paste0(proj_folder, 'data/')
+plotdir = paste0(proj_folder, 'plots/')
+
+plotdir_LP0005 = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Analysis/plots/"
+
+
+
+
+# dir.create(plotdir)
+
+LRI_LUC_ffn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/NZLRI_LUC/nzlri-north-island-edition-2-all-attributes.shp'
+
+ML_ffn = 'D:/NZ_Geospatial_Data/MaoriLandOnline/MLC_2017_05-Shapefile/MLC_May2017_Shapefile/MLC_BLOCKS_May2017_joined2mgmt.shp'
+
+LCDB_ffn = 'D:/NZ_Geospatial_Data/LCDB_v5.0/lris-lcdb-v50-land-cover-database-version-50-mainland-new-zealand-SHP/lcdb-v50-land-cover-database-version-50-mainland-new-zealand.shp'
+
+LUM_ffn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/LUCAS/lucas-nz-land-use-map-1990-2008-2012-2016-v008.shp'
+
+CL_ffn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/lds-linz-managed-crown-property-SHP/linz-managed-crown-property.shp'
+
+PA_ffn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/lds-protected-areas-SHP/protected-areas.shp'
+
+
+
+
+# NZ_coastline_ffn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/NZ Coastline/nz-coastlines-topo-1500k.shp'
+
+NZ_coastline_ffn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/NZ Coastline/nz-coastlines-topo-1500k.shp'
+
+
+Agribase_ffn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/Agribase_SheepBeef/Agribase_enhanced_001_sb.shp'
+
+
+TA_dn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/statsnzterritorial-authority-2019-generalised-SHP/'
+TA_fn = 'territorial-authority-2019-generalised.shp'
+TA_ffn = paste0(TA_dn, TA_fn)
+
+output_folder = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/GIS/layers/"
+
+
+ROI_folder = paste0(output_folder,"ROI_clips/")
+
+```
+
+# palettes and orders
+
+```{r}
+
+# BERL Standard Palette
+Berl_Std_Palette_ffn =  "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/berl data/berl_standard_palette.csv"
+
+Berl_Std_Palette_ffn = read_csv(Berl_Std_Palette_ffn) %>% 
+  mutate(berl_pal = rgb2hex(R,G,B))
+
+berl_pal = Berl_Std_Palette_ffn %>% pull(berl_pal)
+
+
+rohe_order = readRDS(paste0(datadir,"rohe_order.rds"))
+
+
+rohe_key = readRDS("D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/TLA_ROHE_RA_key.rds") %>% 
+  select(TLA,ROHE_with_acc) %>% distinct()
+
+LUCAS_key = readRDS(paste0(datadir,"LUCAS_key.rds"))
+LUCNA_order = readRDS(paste0(datadir,"LUCNA_order.rds"))
+
+```
+
+
+# Function : "split_by_TA"
+
+
+
+
+```{r}
+
+split_by_TA = function(Input_SF, Input_SF_name, TA, TA_curr_name, output_folder){
+  
+  # Input_SF = ML
+  # Input_SF_name = "ML"
+  # TA_curr_name = TA_names[10]
+  #extract the current TA
+  
+  
+  
+  TA_curr = TA %>% filter(str_detect(TA2019_V_1, TA_curr_name))
+  
+  print('-----------------------------------------------')
+  print(paste('Analysing TA ', TA_curr_name))
+  print('-----------------------------------------------')
+  
+  
+  dirout = paste0(output_folder,"TA layers/",TA_curr_name,"/")
+  
+  if (!dir.exists(dirout)){dir.create(dirout, recursive = T)}
+  
+  
+  tic()
+  SFxTA = st_intersection(Input_SF, TA_curr)
+  toc()
+  # dim(SFxTA)
+  
+  SFxTA = validate_sh(SFxTA)
+  
+  
+  ffout =  paste0(dirout,Input_SF_name,"xTA.geojson")
+  print(paste("...writing intersected shape file to ",ffout))
+  st_write(SFxTA,ffout, append = F)
+  
+  
+  # SFxTA_rd = st_read(ffout)
+  # plot(SFxTA_rd)    
+  
+  
+}
+
+
+
+```
+
+
+# Function : "TA_intersecting"
+
+```{r}
+
+TA_intersecting = function(TA, TA_curr_name, output_folder){
+  
+  
+  testing_on = F
+  
+  if (testing_on){
+    
+    TA_NUM=33
+    TA = st_read(TA_ffn)
+    TA_names = TA %>% filter( (TA2019_V_1 != "Chatham Islands Territory") & (TA2019_V_1 != "Area Outside Territorial Authority")) %>% pull(TA2019_V_1)
+    TA_curr_name = TA_names[TA_NUM]
+    
+  }
+  
+  #extract the current TA
+  TA_curr = TA %>% filter(str_detect(TA2019_V_1, TA_curr_name))
+  
+  print('-----------------------------------------------')
+  print(paste('TA Intersection:  TA =  ', TA_curr_name))
+  print('-----------------------------------------------')
+  
+  
+  dirout = paste0(output_folder,"TA layers/",TA_curr_name,"/")
+  
+  if (!dir.exists(dirout)){dir.create(dirout, recursive = T)}
+  
+  quiet_setting = T
+  
+  MLxTA = st_read(paste0(dirout, "MLxTA.geojson"), quiet = quiet_setting)
+  LUMxTA = st_read(paste0(dirout, "LUMxTA.geojson"), quiet = quiet_setting)
+  CLxTA = st_read(paste0(dirout, "CLxTA.geojson"), quiet = quiet_setting)
+  PAxTA = st_read(paste0(dirout, "PAxTA.geojson"), quiet = quiet_setting)
+  
+  if (dim(MLxTA)[1] !=0){
+    MLexists = T
+  }else{
+    MLexists = F
+  }
+  
+  if(MLexists){
+    MLxTA_poly = st_collection_extract(MLxTA,"POLYGON")
+    NMLxTA = ms_erase(st_make_valid(TA_curr),st_make_valid(MLxTA_poly))
+  }else{
+    NMLxTA = TA_curr
+  }
+  
+  
+  CLxTA_poly = st_collection_extract(CLxTA,"POLYGON")
+  PAxTA_poly = st_collection_extract(PAxTA,"POLYGON")
+  
+  
+  NMLxTA_NO_CL = ms_erase(st_make_valid(NMLxTA),st_make_valid(CLxTA_poly))
+  NMLxTA_NO_CL_poly = st_cast(NMLxTA_NO_CL,"POLYGON")
+  
+  
+  NMPLxTA = getLayerDiff(NMLxTA_NO_CL_poly,PAxTA_poly)
+  
+  
+  view_maps = F
+  
+  if (view_maps){
+    mapview(MLxTA)
+    mapview(NMLxTA)
+    mapview(NMLxTA_NO_CL)
+    mapview(PAxTA_poly)
+    mapview(NMPLxTA)
+    mapview(NMPLxTA_poly)
+    mapview(NMPLxTAxLUM)
+    mapview(NMPLxTAxLUM_poly)
+  }
+  
+  
+  NMPLxTA_poly = st_collection_extract(NMPLxTA,"POLYGON")
+  
+  MLxTAxLUM = st_intersection(st_make_valid(MLxTA),st_make_valid(LUMxTA))
+  NMPLxTAxLUM = st_intersection(st_make_valid(NMPLxTA_poly),st_make_valid(LUMxTA))
+  
+  #tmp
+  LUMxTA_poly = st_collection_extract(LUMxTA,"POLYGON")
+  
+  NMPLxTAxLUM = st_intersection(NMPLxTA_poly,LUMxTA)
+  #
+  
+  NMPLxTAxLUM = st_intersection(st_make_valid(NMPLxTA_poly),st_make_valid(LUMxTA))
+  
+  MLxTAxLUM_poly = st_collection_extract(MLxTAxLUM,"POLYGON")
+  NMPLxTAxLUM_poly = st_collection_extract(NMPLxTAxLUM,"POLYGON")
+  
+  MLxTAxLUM_ffout =  paste0(dirout,"MLxTAxLUM.geojson")
+  NMPLxTAxLUM_ffout =  paste0(dirout,"NMPLxTAxLUM.geojson")
+  
+  if (file.exists(MLxTAxLUM_ffout)){
+    unlink(MLxTAxLUM_ffout)
+    file.remove(MLxTAxLUM_ffout)}
+  
+  if (file.exists(NMPLxTAxLUM_ffout)){
+    unlink(NMPLxTAxLUM_ffout)
+    file.remove(NMPLxTAxLUM_ffout)}
+  
+  
+  write_sf(MLxTAxLUM_poly,MLxTAxLUM_ffout,append = F,delete_dsn = T)
+  
+  write_sf(NMPLxTAxLUM_poly,NMPLxTAxLUM_ffout, append = F)
+  
+  
+}
+
+
+```
+
+# This function below is an error catcher fot the cases twhen there the st_make_valid fundtion causes problems with the differening of the vector files
+
+```{r}
+
+
+getLayerDiff = function(L1, L2){
+  out <- tryCatch(
+    {
+      #try first using the st_make_valid
+      dL = ms_erase(st_make_valid(L1),st_make_valid(L2))
+      return(dL)
+    },
+    
+    error = function(cond) {
+      
+      #or if there is an error dont make valid
+      dL2 = ms_erase(L1,L2)
+      return(dL2)
+    },
+    
+    finally = {
+      message("processed the differencing")
+    }
+  )
+  return(out)
+}
+
+```
+
+
+
+
+```{r}
+
+
+TA = st_read(TA_ffn)
+
+
+TA_names = TA %>% filter( (TA2019_V_1 != "Chatham Islands Territory") & (TA2019_V_1 != "Area Outside Territorial Authority")) %>% pull(TA2019_V_1)
+
+
+
+
+todo = seq(1,length(TA_names))
+not_done = c(15,31,33,46,59,63)
+TA_names[not_done]
+
+# for (i in 66:length(TA_names)){
+for (i in not_done){
+
+    
+  TA_curr_name = TA_names[i]
+  
+  print("=====================================================")
+  print(paste("PROCESSING # ", i," of ",length(TA_names), "Stareted at ",Sys.time()))
+  print("=====================================================")
+  
+  tic()
+  TA_intersecting(TA, TA_curr_name=TA_curr_name, output_folder)
+  toc()
+  
+}
+
+
+TA_intersecting(TA, TA_curr_name=TA_names[59], output_folder)
+
+# Input_SF = ML
+# Input_SF_name = "ML"
+TA_curr_name = TA_names[32]
+#extract the current TA
+
+TA_intersecting(TA, TA_curr_name, output_folder)
+
+```
+
+# Read the data
+
+```{r Section-013}
+
+# read the files
+
+ML <- st_read(ML_ffn)         #  27212 features
+LUM = st_read(LUM_ffn)
+TA = st_read(TA_ffn)
+CL = st_read(CL_ffn)
+PA = st_read(PA_ffn)
+
+revalidate = F
+
+if (revalidate){
+  ML <- st_read(ML_ffn)   
+  CL <- st_read(CL_ffn)   
+  PA <- st_read(PA_ffn)   
+  
+  ML_combined_valid = cmb_and_val(ML)
+  CL_combined_valid = cmb_and_val(CL)
+  PA_combined_valid = cmb_and_val(PA)
+  
+  st_write(ML_combined_valid, paste0(output_folder,"ML_combined_valid.geojson"), append = F)
+  st_write(CL_combined_valid, paste0(output_folder,"CL_combined_valid.geojson"), append = F)
+  st_write(PA_combined_valid, paste0(output_folder,"PA_combined_valid.geojson"), append = F)
+}else{
+  # ML_combined_valid = st_read(paste0(output_folder,"ML_combined_valid.geojson"))
+  # 
+  # 
+  # CL_combined_valid = st_read(paste0(output_folder,"CL_combined_valid.geojson"))
+  # PA_combined_valid = st_read(paste0(output_folder,"PA_combined_valid.geojson"))
+}
+
+LUCAS_KEY = LUM %>% st_set_geometry(NULL) %>% select(LUCID_2016, LUCNA_2016) %>% distinct()
+
+
+
+TA_names = TA %>% filter( (TA2019_V_1 != "Chatham Islands Territory") & (TA2019_V_1 != "Area Outside Territorial Authority")) %>% pull(TA2019_V_1) 
+
+```
+
+
+#Run the splitting
+
+```{r}
+
+luca_geosp_lib = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/"
+
+luca_Rcode = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/code/RCode/"
+
+project_folders_all = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/"
+
+current_proj_folder = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0034-Waipa-WhenuaPlan/"
+
+property_NZ_shp_ffn = paste0(luca_geosp_lib, "Property_with_Owner_info/nz-property-titles-including-owners-1.geojson")
+
+PROP = st_read(property_NZ_shp_ffn)
+
+
+for (i in TA_names){
+  
+  # i = TA_names[1]
+  #split_by_TA(ML, "ML", TA,i, output_folder)
+  # split_by_TA(CL, "CL", TA,i, output_folder)
+  # split_by_TA(PA, "PA", TA,i, output_folder)
+  split_by_TA(PROP, "PROP", TA,i, output_folder)
+  # split_by_TA(LUM, "LUM", TA,i, output_folder)
+}
+
+
+```
+
+
+# Do the intersecting
+
+```{r}
+
+for (i in TA_names){
+  
+  #read the layers
+  
+  
+  
+  
+  
+```
+  
+  
+  # run the "get_LUM_for_TA" function for all TAs
+  
+```{r}
+  
+  rerun_LUM_analysis=F
+  
+  if (rerun_LUM_analysis){
+    
+    start_i = 1
+    end_i = length(TA_names)
+    
+    
+    for (i in start_i:end_i){
+      TA_curr_name = TA_names[i]
+      L = get_LUM_for_TA(TA_curr_name, TA, LUM, ML,LUCAS_KEY, output_folder)
+    }
+    
+  }
+  
+  run_single_TA_LUM_analysis=T
+  
+  if (run_single_TA_LUM_analysis){
+    
+    
+    
+    L = get_LUM_for_TA(TA_names[22], TA, LUM, ML, output_folder)
+    
+  }
+  
+```
+  
+  
+  # Collate Tables
+  
+```{r}
+  
+  TA = st_read(TA_ffn)
+  
+  
+  TA_names = TA %>% filter( (TA2019_V_1 != "Chatham Islands Territory") & (TA2019_V_1 != "Area Outside Territorial Authority")) %>% pull(TA2019_V_1) 
+  
+  
+  start_i = 1
+  end_i = length(TA_names)
+  
+  
+  number_TAs_not_found = 0
+  
+  
+  for (i in start_i:end_i){
+    
+    TA_curr_name = TA_names[i]
+    
+    
+    
+    
+    dn = paste0(output_folder,"TA layers/",TA_curr_name,"/")
+    fn = "LUMxTA_CMB_nogeo_smy.csv"
+    ffn = paste0(dn,fn)
+    
+    
+    
+    
+    if (file.exists(ffn)){
+      D = read_csv(ffn) %>% mutate(TA = TA_curr_name)
+      
+      if (i == start_i){
+        
+        DD = D
+        
+      }else{
+        DD = DD %>% bind_rows(D)
+      }
+    }else{
+      print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+      print(paste("Could not find", ffn))
+      print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+      
+      number_TAs_not_found = number_TAs_not_found+1
+      
+    }
+    
+  }
+  
+  DD = DD %>% select(TA, everything())
+  
+  print(paste("Number of TAs not found = ", number_TAs_not_found))
+  
+  dout = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/data/"
+  
+  fout = "Collated_LUMxTA_summary_tables.csv"
+  
+  
+  ffout = paste0(dout, fout)
+  
+  write_csv(DD,ffout)
+  
+  # now tag it with the Rohe ID and summarise it that way as well
+  
+  
+  
+  LUMxML_stats = DD %>% 
+    left_join(rohe_key, by = c("TA" = "TLA")) %>% 
+    mutate(ML = ifelse(is.na(ML), 0, ML),
+           NML = ifelse(is.na(ML), 0, NML),
+           AOT = ML + NML) %>% 
+    select(Rohe = ROHE_with_acc, LUCID_2016,ML,NML,AOT) %>% 
+    group_by(Rohe, LUCID_2016) %>% 
+    summarise(ML = sum(ML),NML = sum(NML), AOT = sum(AOT)) %>% 
+    ungroup() %>% 
+    group_by(Rohe) %>% 
+    mutate(
+      ML_perc = 100*ML/sum(ML),
+      NML_perc = 100*NML/sum(NML),
+      AOT_perc = 100*AOT/sum(AOT)) %>% 
+    left_join(LUCAS_key, by = "LUCID_2016") %>% 
+    rename(`Land Cover` = LUCNA_2016   )            
+  
+  LUMxML_perc = LUMxML_stats %>% 
+    select(Rohe, `Land Cover`, "M\u101ori" = ML_perc , "Non-M\u101ori" = NML_perc) %>% 
+    gather(key,value,"Maori",`Non-Maori`) 
+  
+  LUMxML_perc$Rohe = factor(LUMxML_perc$Rohe, levels = rohe_order)
+  LUMxML_perc$`Land Cover` = factor(LUMxML_perc$`Land Cover`, levels = rev(LUCNA_order))
+  
+  LP0005_Analysis_folder = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Analysis/"
+  
+  
+  
+  write_csv(LUMxML_stats, file = paste0(LP0005_Analysis_folder, "LUMxML_stats.csv"))
+
+```
+  
+  
+  #----------------
+  #  Fig 10 Series
+  #----------------
+  
+  
+  ## --> Fig 10a - Percentage LUM Class Color by Title - Split by Rohe
+  
+```{r}
+  
+  
+  fignum = 10
+  figdesc = "a-Percentage-LUM-Class-Split_by_Rohe"
+  figfmt = ".png"
+  
+  g = ggplot(LUMxML_perc, aes(`Land Cover`, value, fill = key)) + geom_bar(stat = "identity", position = "dodge") + coord_flip() + facet_wrap(~Rohe)
+  
+  g = g + labs(y = "Percent Cover")
+  
+  g = g + scale_fill_manual(values = berl_pal[c(9,1)])
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  
+  
+  ```
+  
+  
+  
+  ## --> Fig 10b - Percentage LUM Class Color by Title - Split by Rohe
+  
+  ```{r}
+  
+  
+  fignum = 10
+  figdesc = "b-Percentage of forest in each class"
+  figfmt = ".png"
+  
+  
+  Forest_groups = c("Natural Forest", "Planted Forest - Pre 1990", "Post 1989 Forest")
+  
+  LUMxML_stats_forest = LUMxML_stats %>% 
+    filter(`Land Cover` %in% Forest_groups) %>% 
+    select(-contains("Perc")) %>% 
+    select(Rohe, `Land Cover`, "M\u101ori" = ML , "Non-M\u101ori" = NML) %>% 
+    gather(key,value,"Maori",`Non-Maori`) %>% 
+    ungroup() %>% 
+    group_by(Rohe,key) %>% 
+    mutate(
+      Percent = 100*value/sum(value),
+      key = str_replace_all(key,"Maori","M\u101ori"))
+  
+  
+  
+  
+  g = ggplot(LUMxML_stats_forest, aes(Rohe, Percent, fill = `Land Cover`)) + geom_bar(stat = "identity", position = "stack") + coord_flip() + facet_wrap(~key)
+  
+  g = g + labs(y = "Percent Cover")
+  
+  g = g + scale_fill_manual(values = berl_pal[c(5,1,9)])
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  
+  
+```
+  
+  
+  
+## --> Fig 10c - Percentage Post 89 Pre 90
+  
+```{r}
+  
+  
+  fignum = 10
+  figdesc = "c-Percentage of forest in P89 P90"
+  figfmt = ".png"
+  
+  
+  Forest_groups = c("Planted Forest - Pre 1990", "Post 1989 Forest")
+  
+  LUMxML_stats_forest = LUMxML_stats %>% 
+    filter(`Land Cover` %in% Forest_groups) %>% 
+    select(-contains("Perc")) %>% 
+    select(Rohe, `Land Cover`, "M\u101ori" = ML , "Non-M\u101ori" = NML) %>% 
+    gather(key,value,"Maori",`Non-Maori`) %>% 
+    ungroup() %>% 
+    group_by(Rohe,key) %>% 
+    mutate(
+      Percent = 100*value/sum(value),
+      key = str_replace_all(key,"Maori","M\u101ori"))
+  
+  
+  LUMxML_stats_forest$Rohe = factor(LUMxML_stats_forest$Rohe, levels = rev(rohe_order))
+  
+  
+  g = ggplot(LUMxML_stats_forest, aes(Rohe, Percent, fill = `Land Cover`)) + geom_bar(stat = "identity", position = "stack") + coord_flip() + facet_wrap(~key)
+  
+  g = g + labs(y = "Percent Cover")
+  
+  g = g + scale_fill_manual(values = berl_pal[c(1,9)])
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  
+  
+  ```
+  
+  ## --> Fig 10c2 - Percentage Post 89 Pre 90 All-NZ
+  
+  ```{r}
+  
+  
+  fignum = 10
+  figdesc = "c2-Percentage of forest in P89 P90 - All NZ"
+  figfmt = ".png"
+  
+  
+  Forest_groups = c("Planted Forest - Pre 1990", "Post 1989 Forest")
+  
+  LUMxML_stats_forest = LUMxML_stats %>% 
+    filter(`Land Cover` %in% Forest_groups) %>% 
+    select(-contains("Perc")) %>% 
+    select(Rohe, `Land Cover`, "M\u101ori" = ML , `All NZ`= AOT) %>% 
+    gather(key,value,"Maori",`All NZ`) %>% 
+    ungroup() %>% 
+    group_by(Rohe,key) %>% 
+    mutate(
+      Percent = 100*value/sum(value),
+      key = str_replace_all(key,"Maori","M\u101ori"))
+  
+  
+  LUMxML_stats_forest$Rohe = factor(LUMxML_stats_forest$Rohe, levels = rev(rohe_order))
+  LUMxML_stats_forest$key = factor(LUMxML_stats_forest$key, levels = c("M\u101ori", "All NZ"))
+  
+  
+  g = ggplot(LUMxML_stats_forest, aes(Rohe, Percent, fill = `Land Cover`)) + geom_bar(stat = "identity", position = "stack") + coord_flip() + facet_wrap(~key)
+  
+  g = g + labs(y = "Percent Cover")
+  
+  g = g + scale_fill_manual(values = berl_pal[c(1,9)])
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  fig_fn_LP0005 = "Fig-9b-LP0005-Report-Percent-P89-P90-by-rohe.png"
+  fig_ffn_LP0005 = paste0(plotdir_LP0005, fig_fn_LP0005)
+  ggsave(fig_ffn_LP0005,g)
+  
+  
+  ```
+  
+  
+  ## --> Fig 10d - Absolute Areas Post 89 Pre 90
+  
+  ```{r}
+  
+  
+  fignum = 10
+  figdesc = "d-Absolute Areas Post 89 Pre 90"
+  figfmt = ".png"
+  
+  
+  Forest_groups = c("Planted Forest - Pre 1990", "Post 1989 Forest")
+  
+  LUMxML_stats_forest = LUMxML_stats %>% 
+    filter(`Land Cover` %in% Forest_groups) %>% 
+    select(-contains("Perc")) %>% 
+    select(Rohe, `Land Cover`, "M\u101ori" = ML , "Non-M\u101ori" = NML) %>% 
+    gather(key,value,"Maori",`Non-Maori`) %>% 
+    ungroup() %>% 
+    group_by(Rohe,key) 
+  
+  LUMxML_stats_forest$Rohe = factor(LUMxML_stats_forest$Rohe, levels = rev(rohe_order))
+  LUMxML_stats_forest$`Land Cover` = factor(LUMxML_stats_forest$`Land Cover`, levels = rev(LUCNA_order))
+  
+  
+  
+  g = ggplot(LUMxML_stats_forest, aes(Rohe, value, fill = `Land Cover`)) + geom_bar(stat = "identity", position = "stack") + coord_flip() + facet_wrap(~key, scales = "free_x")
+  
+  g = g + labs(y = "Total Area")
+  
+  g = g + scale_fill_manual(values = berl_pal[c(1,9)])
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  
+  
+  ```
+  
+  
+  
+  ## --> Fig 10d2 - Absolute Areas Post 89 Pre 90
+  
+  ```{r}
+  
+  
+  fignum = 10
+  figdesc = "d2-Absolute Areas Post 89 Pre 90-All NZ"
+  figfmt = ".png"
+  
+  
+  Forest_groups = c("Planted Forest - Pre 1990", "Post 1989 Forest")
+  
+  LUMxML_stats_forest = LUMxML_stats %>% 
+    filter(`Land Cover` %in% Forest_groups) %>% 
+    select(-contains("Perc")) %>% 
+    select(Rohe, `Land Cover`, Maori= ML , `All NZ` = AOT) %>% 
+    gather(key,value,Maori,`All NZ`) %>% 
+    ungroup() %>% 
+    mutate(value = value/1000, key = str_replace_all(key,"Maori","M\u101ori")) %>% 
+    group_by(Rohe,key) 
+  
+  LUMxML_stats_forest$Rohe = factor(LUMxML_stats_forest$Rohe, levels = rev(rohe_order))
+  LUMxML_stats_forest$`Land Cover` = factor(LUMxML_stats_forest$`Land Cover`, levels = rev(LUCNA_order))
+  LUMxML_stats_forest$key = factor(LUMxML_stats_forest$key, levels = c("M\u101ori","All NZ"))
+  
+  
+  g = ggplot(LUMxML_stats_forest, aes(Rohe, value, fill = `Land Cover`)) + geom_bar(stat = "identity", position = "stack") + coord_flip() + facet_wrap(~key, scales = "free_x")
+  
+  g = g + labs(y = "Total Area (ha x 1000)")
+  
+  g = g + scale_fill_manual(values = berl_pal[c(1,9)])
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  fig_fn_LP0005 = "Fig-9c-LP0005-Report-Total-Area-by-rohe(Fig10d2).png"
+  fig_ffn_LP0005 = paste0(plotdir_LP0005, fig_fn_LP0005)
+  ggsave(fig_ffn_LP0005,g)
+  
+  ```
+  
+  
+  ## --> Fig 10e - LUM areas 
+  
+  ```{r}
+  
+  
+  fignum = 10
+  figdesc = "e-Absolute Areas All Classes National"
+  figfmt = ".png"
+  
+  
+  Forest_groups = c("Planted Forest - Pre 1990", "Post 1989 Forest")
+  
+  LUMxML_stats_forest_national = LUMxML_stats %>% 
+    select(-contains("Perc")) %>% 
+    select(Rohe, `Land Cover`, "M\u101ori" = ML , "Non-M\u101ori" = NML) %>% 
+    gather(key,value,"Maori",`Non-Maori`) %>% 
+    rename(Area = value)
+  
+  LUMxML_stats_forest_national_total = LUMxML_stats_forest_national %>% 
+    ungroup() %>% 
+    group_by(`Land Cover`,key) %>% 
+    summarise(Area = sum(Area)) %>% 
+    spread(key,Area) %>% 
+    filter( grepl("Forest", `Land Cover`)) %>% 
+    mutate(`All-NZ` = Maori + `Non-Maori`)
+  
+  
+  
+  LUMxML_stats_forest_national$Rohe = factor(LUMxML_stats_forest_national$Rohe, levels = rev(rohe_order))
+  LUMxML_stats_forest_national$`Land Cover` = factor(LUMxML_stats_forest_national$`Land Cover`, levels = rev(LUCNA_order))
+  
+  
+  
+  g = ggplot(LUMxML_stats_forest_national, aes(`Land Cover`, Area/1000)) + geom_bar(stat = "identity", position = "stack", fill = berl_pal[1]) + coord_flip() + facet_wrap(~key, scales = "free_x")
+  
+  g = g + labs(y = "Total Area (thousands of ha)")
+  
+  # g = g + scale_fill_manual(values = berl_pal)
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  
+  
+  ```
+  
+  
+  ## --> Fig 10e2 - LUM areas 
+  
+  ```{r}
+  
+  
+  fignum = 10
+  figdesc = "e2-Absolute Areas All Classes National-All NZ"
+  figfmt = ".png"
+  
+  
+  Forest_groups = c("Planted Forest - Pre 1990", "Post 1989 Forest")
+  
+  LUMxML_stats_forest_national = LUMxML_stats %>% 
+    select(-contains("Perc")) %>% 
+    select(Rohe, `Land Cover`, "M\u101ori" = ML , "All NZ" = AOT) %>% 
+    gather(key,value,"Maori",`All NZ`) %>% 
+    rename(Area = value) %>% 
+    mutate(key = str_replace_all(key,"Maori","M\u101ori"))
+  
+  LUMxML_stats_forest_national_total = LUMxML_stats_forest_national %>% 
+    ungroup() %>% 
+    group_by(`Land Cover`,key) %>% 
+    summarise(Area = sum(Area)) %>% 
+    spread(key,Area) %>% 
+    filter( grepl("Forest", `Land Cover`)) %>% 
+    mutate(`All-NZ` = Maori + `Non-Maori`) 
+  
+  LUMxML_stats_forest_national %>% 
+    ungroup() %>% 
+    group_by(`Land Cover`,key) %>% 
+    summarise(Area = sum(Area)) %>% 
+    spread(key,Area) %>% pull(`Maori`) %>% sum()/1e6
+  
+  
+  
+  
+  
+  
+  LUMxML_stats_forest_national$Rohe = factor(LUMxML_stats_forest_national$Rohe, levels = rev(rohe_order))
+  LUMxML_stats_forest_national$`Land Cover` = factor(LUMxML_stats_forest_national$`Land Cover`, levels = rev(LUCNA_order))
+  LUMxML_stats_forest_national$key = factor(LUMxML_stats_forest_national$key, levels = c("M\u101ori","All NZ"))
+  
+  
+  g = ggplot(LUMxML_stats_forest_national, aes(`Land Cover`, Area/1000)) + geom_bar(stat = "identity", position = "stack", fill = berl_pal[1]) + coord_flip() + facet_wrap(~key, scales = "free_x")
+  
+  g = g + labs(y = "Total Area (thousands of ha)")
+  
+  # g = g + scale_fill_manual(values = berl_pal)
+  
+  
+  g = berl_style(g)
+  
+  g
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  fig_fn_LP0005 = "Fig-9a-LP0005-Report-Abolute-Areas-All-Classes(Fig10e2).png"
+  fig_ffn_LP0005 = paste0(plotdir_LP0005, fig_fn_LP0005)
+  ggsave(fig_ffn_LP0005,g)
+  
+  
+  
+  ```
+  
+  # A calculation of net removals by forests using the 2019 inventory data
+  
+  use Table 6.4.2 page 282 of NZEI-2018
+  
+  ```{r}
+  
+  Net_Area_Pre1990_natural_2018 = 7756584         # ha
+  Net_Emissions_Pre1990_natural_2018 = -2684    # kT CO2
+  
+  Net_Area_Pre1990_planted_2018 = 1445989         # ha
+  Net_Emissions_Pre1990_planted_2018 = 562.5    # kT CO2
+  
+  Net_Area_Post1989_2018 = 702590         # ha
+  Net_Emissions_Post1989_2018 = -14854.8    # kT CO2
+  
+  Average_C_emissions_per_ha_Pre1990_natural = Net_Emissions_Pre1990_natural_2018/Net_Area_Pre1990_natural_2018
+  
+  Average_C_emissions_per_ha_Pre1990_planted = Net_Emissions_Pre1990_planted_2018/Net_Area_Pre1990_planted_2018
+  
+  
+  Average_C_removal_per_ha_Post1989 = Net_Emissions_Post1989_2018/Net_Area_Post1989_2018
+  
+  ```
+  
+  
+  
+  # read in the layers
+  
+  ```{r Section-003}
+  
+  
+  LRI <- st_read(LRI_LUC_ffn)   #  66070 features
+  ML <- st_read(ML_ffn)         #  27212 features
+  LCDB <- st_read(LCDB_ffn)     # 511104 features
+  NZ_COAST <-st_read(NZ_coastline_ffn)
+  
+  LUM = st_read(LUM_ffn)
+  TA = st_read(TA_ffn)
+  TA_names = TA %>%  pull(TA2019_V_1)
+  
+  TA_curr_name = TA_names[12]
+  TA_curr = TA %>% filter(str_detect(TA2019_V_1, TA_curr_name))
+  
+  
+  AB = st_read(Agribase_ffn)
+  
+  
+  ggplot(TA_curr) + geom_sf()
+  # 
+  # ggplot(ML) + geom_sf()
+  # mapview(ML)
+  
+  
+  # class(LUC)
+  
+  LUCxML_ffout = paste0(proj_folder, 'LUCxML.shp')
+  
+  
+  ```
+  
+  
+  
+  # Intersect Data Layers
+  
+  ```{r Section-004}
+  
+  output_folder = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/GIS/layers/"
+  
+  #intersect LUC and Territorial Authorty (TA)
+  LUCxTA = st_intersection(LUC, TA_curr)
+  st_write(LUCxTA, paste0(output_folder,"LUCxTA.shp"), append = F)
+  
+  #intersect Maori Land (ML) and Territorial Authorty (TA)
+  MLxTA = st_intersection(TA_curr, st_combine(ML))
+  tic()
+  MLxTA2 = st_collection_extract(MLxTA,"POLYGON")
+  toc()
+  st_write(MLxTA2, paste0(output_folder,"MLxTA.shp"), append = F)
+  
+  #intersect Non-Maori Land (NML) and Territorial Authorty (TA) (24 sec)
+  tic()
+  NMLxTA = st_difference(TA_curr, st_combine(ML))
+  toc()
+  st_write(NMLxTA, paste0(output_folder,"NMLxTA.shp"), append = F)
+  
+  #intersect Maori Land (ML) x Territorial Authorty (TA) with LUC
+  LUCxMLxTA = st_intersection(LUC, MLxTA2)
+  st_write(LUCxMLxTA, paste0(output_folder,"LUCxMLxTA4.shp"), append = F)
+  
+  #intersect Non-Maori Land (NML) x Territorial Authorty (TA) with LUC
+  LUCxNMLxTA = st_intersection(LUC, NMLxTA)
+  st_write(LUCxNMLxTA, paste0(output_folder,"LUCxNMLxTA.shp"), append = F)
+  
+  
+  #intersect Agribase with TA
+  ABxTA = st_intersection(Agribase, TA)
+  st_write(LUCxNMLxTA, paste0(output_folder,"LUCxNMLxTA.shp"), append = F)
+  
+  #intersect Maori Land (ML) x Territorial Authorty (TA) with LUM
+  tic()
+  LUMxMLxTA = st_intersection(LUM, MLxTA2)
+  toc()
+  
+  tic()
+  st_write(LUMxMLxTA, paste0(output_folder,"LUMxMLxTA.shp"), append = F)
+  toc()
+  
+  
+  #intersect Non-Maori Land (ML) x Territorial Authorty (TA) with LUM (takes 7.4 minutes!)
+  # Produces 22830 Features
+  tic()
+  LUMxNMLxTA = st_intersection(LUM, NMLxTA)
+  toc()
+  
+  tic()
+  st_write(LUMxNMLxTA, paste0(output_folder,"LUMxNMLxTA.shp"), append = F)
+  toc()
+  
+  
+  ```
+  
+  # Create a nationwide layer of Non-Maori Land
+  
+  ```{r Section-005}
+  
+  p1 = st_as_sfc(NZ_COAST)
+  st_is_valid(NZ_COAST)
+  st_is_valid(NZ_COAST)
+  
+  ML_cmb = st_combine(ML)
+  
+  # This layer is not valid
+  # st_is_valid(ML_cmb)
+  
+  #make it valid
+  ML_cmb_val = st_make_valid(ML_cmb)
+  st_is_valid(ML_cmb_val)
+  
+  NML = st_difference(NZ_COAST,ML_cmb_val)
+  st_write(NML, paste0(output_folder,"NML.shp"), append = F)
+  
+  ```
+  
+  # Intersect the LUM with the ML Layer
+  
+  ```{r Section-006}
+  remake_LUM_ML = T
+  if (remake_LUM_ML){
+    LUM_ML = st_intersection(ML, LUM)
+    
+    
+    st_write(LUM_ML, paste0(output_folder,"LUM_ML_2.geojson"), append = F)
+  }else{
+    LUM_ML = st_read(paste0(output_folder,"LUM_ML_2.geojson"))
+  }
+  
+  
+  
+  
+  ```
+  
+  # Intersect the LUM with the NML Layer
+  
+  ```{r Section-007}
+  remake_LUM_NML = T
+  if (remake_LUM_NML){
+    LUM_ML = st_intersection(NML, LUM)
+    
+    
+    st_write(LUM_NML, paste0(output_folder,"LUM_NML_2.geojson"), append = F)
+  }else{
+    LUM_NML = st_read(paste0(output_folder,"LUM_NML_2.geojson"))
+  }
+  
+  
+  ```
+  
+  # Find out how much land in each of these is in classes 71-73
+  
+  ```{r Section-008}
+  
+  LUM_ML
+  
+  
+  
+  ```
+  
+  
+  
+  # Create some Northland ROI clips 
+  
+  3 May 2021. To make data manageable, clip all the data to an ROI in Northland
+  
+  
+  ```{r Section-009}
+  
+  
+  ROI_ffn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/GIS/layers/ROI_Northland.shp"
+  
+  ROI = st_read(ROI_ffn)
+  
+  
+  AB_clip = st_intersection(AB, ROI)
+  ML_clip = st_intersection(ML, ROI)
+  LUM_clip = st_intersection(LUM, ROI)
+  LCDB_clip = st_intersection(LCDB, ROI)
+  LRI_clip = st_intersection(LRI, ROI) %>% st_cast("POLYGON") %>% mutate(LUC1C = substr(LUC,1,1))
+  
+  
+  NML_clip = st_difference(ROI,st_combine(ML_clip))
+  plot(NML_clip)
+  plot(ML_clip)
+  
+  plot(LRI_clip)
+  
+  #save them all
+  st_write(AB_clip, paste0(ROI_folder,"AB_clip.shp"), append = F,delete_layer = T, delete_dsn = T)
+  st_write(ML_clip, paste0(ROI_folder,"ML_clip.shp"), append = F,delete_layer = T, delete_dsn = T)
+  st_write(NML_clip, paste0(ROI_folder,"NML_clip.shp"), append = F,delete_layer = T, delete_dsn = T)
+  st_write(LUM_clip, paste0(ROI_folder,"LUM_clip.shp"), append = F,delete_layer = T, delete_dsn = T)
+  st_write(LCDB_clip, paste0(ROI_folder,"LCDB_clip.shp"), append = F,delete_layer = T, delete_dsn = T)
+  st_write(LRI_clip, paste0(ROI_folder,"LRI_clip.shp"), append = F,delete_layer = T, delete_dsn = T)
+  
+  # dir.exists(ROI_folder)
+  
+  
+  ````
+  
+  
+  # load the clipped shape files
+  
+  ```{r Section-010}
+  
+  #save them all
+  AB_clip = st_read(paste0(ROI_folder,"AB_clip.shp"))
+  ML_clip = st_read(paste0(ROI_folder,"ML_clip.shp")) %>% mutate(IS_ML = "MFL")
+  NML_clip = st_read(paste0(ROI_folder,"NML_clip.shp")) %>% mutate(IS_ML = "GTL")
+  LUM_clip = st_read(paste0(ROI_folder,"LUM_clip.shp"))
+  LCDB_clip = st_read(paste0(ROI_folder,"LCDB_clip.shp"))
+  LRI_clip = st_read(paste0(ROI_folder,"LRI_clip.shp"))
+  
+  AB_clip_MV = mapview(AB_clip, zcol = "SR_ha_2")
+  AB_clip_MV
+  names(AB_clip)
+  
+  ```
+  
+  
+  # Intersect Agribase with ML
+  
+  ```{r Section-011}
+  
+  
+  
+  #extract Agribase for the FML in this ROI
+  MLxAB_clip = st_intersection(ML_clip, AB_clip) 
+  
+  #extract Agribase for the NML in this ROI
+  NMLxAB_clip = st_intersection(NML_clip, AB_clip) 
+  
+  
+  st_write(MLxAB_clip, paste0(ROI_folder,"MLxAB_clip.geojson"))
+  
+  #get the average stocking rate
+  avg_SR = MLxAB_clip %>% summarise(avg_SR = mean(SR_ha_2)) %>% pull(avg_SR)
+  sd_SR = MLxAB_clip %>% summarise(sd_SR = sd(SR_ha_2)) %>% pull(sd_SR)
+  
+  MLxAB_clip = MLxAB_clip %>% mutate(IS_ML = "FML")
+  NMLxAB_clip = NMLxAB_clip %>% mutate(IS_ML = "GLT")
+  
+  NML_ML_AB_clip = MLxAB_clip %>% bind_rows(NMLxAB_clip)
+  
+  g = ggplot(NML_ML_AB_clip) + geom_sf(aes(fill = SR_ha_2)) + scale_fill_continuous(type = "viridis") + facet_grid(IS_ML~.) + theme_bw()
+  
+  ggsave(g, file = paste0(plotdir, 'Agribase_SR_ROI.png'))
+  
+  
+  ```
+  
+  # Intersect LUM with ML - Clip Basis
+  
+  ```{r Section-012}
+  
+  
+  
+  #extract Agribase for the FML in this ROI
+  MLxLUM_clip = st_intersection(ML_clip, LUM_clip) 
+  
+  #extract Agribase for the NML in this ROI
+  NMLxLUM_clip = st_intersection(NML_clip, LUM_clip) 
+  
+  NMLxLUM_clip_fn = paste0(ROI_folder,"MLxLUM_clip.shp")
+  unlink(NMLxLUM_clip_fn)
+  file.remove(NMLxLUM_clip_fn)
+  st_write(MLxLUM_clip, NMLxLUM_clip_fn)
+  
+  NML_ML_LUM_clip = MLxLUM_clip %>% bind_rows(NMLxLUM_clip)
+  names(MLxLUM_clip)
+  
+  ggplot(NML_ML_LUM_clip) + geom_sf(aes(fill = as.factor(LUCNA_2016 )))+ facet_grid(IS_ML~.)
+  
+  forest_ids = c(71,72,73)
+  
+  NML_ML_LUM_forest_clip = NML_ML_LUM_clip %>% filter(LUCID_2016 %in% forest_ids) %>% 
+    mutate(FCLASS = paste(LUCID_2016,LUCNA_2016))
+  ggplot(NML_ML_LUM_forest_clip) + geom_sf(aes(fill = as.factor(LUCNA_2016 )))+ facet_grid(IS_ML~.)
+  
+  g = ggplot(NML_ML_LUM_forest_clip) + geom_sf(aes(fill = as.factor(FCLASS )))+ facet_grid(IS_ML~.)
+  ggsave(g, file = paste0(plotdir, 'LUM_FCLASS_ROI.png'))
+  
+  NML_ML_LUM_forest_clip %>% group_by(IS_ML,FCLASS) %>% summarise(Area = mean(AREA_HA))
+  
+  
+  
+  MLxLUM_clip[100,]
+  #get the average stocking rate
+  avg_SR = MLxLUM_clip %>% summarise(avg_SR = mean(SR_ha_2)) %>% pull(avg_SR)
+  sd_SR = NMLxLUM_clip %>% summarise(sd_SR = sd(SR_ha_2)) %>% pull(sd_SR)
+  
+  MLxAB_clip = MLxAB_clip %>% mutate(IS_ML = "FML")
+  NMLxAB_clip = NMLxAB_clip %>% mutate(IS_ML = "GLT")
+  
+  NML_ML_AB_clip = MLxAB_clip %>% bind_rows(NMLxAB_clip)
+  
+  g = ggplot(NML_ML_AB_clip) + geom_sf(aes(fill = SR_ha_2)) + scale_fill_continuous(type = "viridis") + facet_grid(IS_ML~.) + theme_bw()
+  
+  ggsave(g, file = paste0(plotdir, 'Agribase_SR_ROI.png'))
+  
+  
+  ```
+  
+  
+  # [14]
+  
+  ```{r Section-014}
+  
+  
+  
+  ggplot(MLxAB_clip) + geom_sf(aes(fill = SR_ha_2)) + scale_fill_continuous(type = "viridis")
+  
+  ggplot(NMLxAB_clip) + geom_sf(aes(fill = SR_ha_2)) + scale_fill_continuous(type = "viridis")
+  #compare with non-Maori Land
+  
+  
+  
+  
+  
+  names(AB_clip)
+  
+  write_csv(AB_clip, paste0(ROI_folder,"AB_clip.csv"))
+  write_csv(ML_clip, paste0(ROI_folder,"ML_clip.csv"))
+  write_csv(LUM_clip, paste0(ROI_folder,"LUM_clip.csv"))
+  write_csv(LCDB_clip, paste0(ROI_folder,"LCDB_clip.csv"))
+  write_csv(LRI_clip, paste0(ROI_folder,"LRI_clip.csv"))
+  
+  
+  ```
+  
+  
+  
+  
+  Load the Shape Files for this TA
+  
+  ```{r Section-014}
+  
+  output_folder = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/GIS/layers/"
+  
+  
+  LUCxMLxTA = st_read(paste0(output_folder,"LUCxMLxTA4.shp")) %>% mutate(ML = "MAORI")
+  LUCxNMLxTA = st_read(paste0(output_folder,"LUCxNMLxTA.shp"))%>% mutate(ML = "NON-MAORI")
+  
+  LUCxTA_cmb = LUCxMLxTA %>% bind_rows(LUCxNMLxTA)
+  LUCxTA_cmb$ML
+  
+  LUCxTA_cmb_modified = LUCxTA_cmb %>% 
+    mutate(LUC1C = substr(LUC,1,1))
+  
+  
+  ggplot(LUCxTA_cmb_modified) + geom_sf(aes(fill = as.numeric(CCAV)), color = NA) + facet_wrap(~ML) + scale_fill_gradient(low="blue", high="red") 
+  
+  
+  LUCxTA_cmb_modified_smy_LUC1C = as_tibble(as.data.frame(LUCxTA_cmb_modified)) %>% 
+    mutate(Area = as.numeric(st_area(LUCxTA_cmb_modified))/1e4) %>% 
+    group_by(ML, LUC1C) %>%
+    summarise(AREA = sum(Area)) %>% 
+    mutate(AREA_PERC = 100*AREA/sum(AREA))
+  
+  
+  ggplot(LUCxTA_cmb_modified_smy_LUC1C) + geom_bar(aes(x=LUC1C, y = AREA_PERC, fill = as.factor(ML)), stat = "identity", position = "dodge")
+  
+  
+  LUCxTA_cmb_modified_smy_CCAV = as_tibble(as.data.frame(LUCxTA_cmb_modified)) %>% 
+    mutate(Area = as.numeric(st_area(LUCxTA_cmb_modified))/1e4) %>% 
+    group_by(ML, CCAV) %>%
+    summarise(AREA = sum(Area)) %>% 
+    mutate(AREA_PERC = 100*AREA/sum(AREA))
+  
+  
+  ggplot(LUCxTA_cmb_modified_smy_CCAV) + geom_bar(aes(x=CCAV, y = AREA_PERC, fill = as.factor(ML)), stat = "identity", position = "dodge")
+  
+  
+  ```
+  
+  
+  
+  # 
+  
+  ```{r}
+  
+  
+  library(sf)
+  
+  PROP_ffn_1 = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/Property_with_Owner_info/nz-property-titles-including-owners-1.geojson"
+  
+  
+  PROP_ffn_2 = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/Property_with_Owner_info/nz-property-titles-including-owners-2.geojson"
+  
+  
+  tic
+  PROP_1 = read_sf(PROP_ffn_1)
+  PROP_2 = read_sf(PROP_ffn_2)
+  toc
+  
+  PROP_1_ng = PROP_1
+  
+  
+  st_geometry(PROP_1) = NULL
+  
+  
+  library(tidyverse)
+  
+  PROP_1 %>% filter(str_detect(owners, "Cynthia Alice Bell")) %>% pull(owners)
+  
+  
+  ```
+  
+  

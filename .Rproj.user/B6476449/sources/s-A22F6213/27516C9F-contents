@@ -1,0 +1,4544 @@
+---
+title: Emissions Profile for the Maori Economy - R Notebook"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
+  html_notebook: default
+editor_options:
+  chunk_output_type: console
+---
+
+This is the main analysis for the BERL/LUCA Project Greenhouse Gases from the Maori Economy
+Funded by MBIE and MPI
+
+Author - Andrew McMillan
+
+26 June 2021
+
+
+# ------------------------------------
+# Set up
+# ------------------------------------
+
+
+# clear workspace unload any exisiting packages in R environment
+
+```{r}
+
+rm(list = ls())
+
+intialPackages = search() # added as 1st line of R script to get list of default packages
+# below lines are added when newly attached packages needs to be removed
+newPackages = search()[!(search() %in% intialPackages)]
+try(sapply(newPackages, detach, character.only=TRUE, unload=TRUE, force=TRUE), silent=TRUE)
+
+```
+
+
+
+
+
+
+# Load Libraries
+
+```{r}
+
+library(tidyverse)
+library(plotly)
+# library(treemapify)
+library(readxl)
+library(mapview)
+library(sf)
+library(leaflet)
+library(cowplot)
+library(lubridate)
+library(xlsx)
+library(ggpubr)
+
+```
+
+# Functions
+
+### saveplot
+
+```{r}
+
+# this will save a ggplot object to disk
+
+saveplot = function(g, fignum,figdescr, figfmt, plotdir = plotdir){
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  ggsave(fig_ffn,g)
+  
+  return(g)
+  
+}
+
+
+
+```
+
+### saveplotly
+
+```{r}
+
+#this will save a plotly object to disk
+
+saveplotly = function(p, fignum,figdescr, figfmt, plotdir = plotdir, savehtml = T){
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  setwd(plotdir)
+  
+  orca(p, fig_fn)
+  
+  if(savehtml){
+    
+    fig_fn_html = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,'.html')
+    htmlwidgets::saveWidget(as_widget(p), fig_fn_html)
+    
+  }
+  
+  return(p)
+  
+}
+
+
+```
+
+### rgb2hex - converts and RGB color value to its hex equivalent
+
+```{r}
+
+rgb2hex <- function(r,g,b) rgb(r, g, b, maxColorValue = 255)
+
+
+```
+
+
+### BERL style - a style created by LUCA designed for inclusion into BERL Reports 
+
+```{r}
+
+berl_style <- function(g, option=""){
+  
+  g = g + theme_minimal()
+  g = g + theme(panel.grid = element_blank())
+  g = g + theme(panel.grid.major.x = element_line(color = "darkgrey"))
+  
+  if (option=="MNM"){g = g + scale_fill_manual(berl_pal[c(1,2)])}
+  
+  
+  return(g)
+}
+
+
+```
+
+
+# hbar_stack function
+
+```{r}
+
+hbar_stack = function(D, X, Y, FILL, hori_title="Y", vert_title = "X", pal = NULL, facet = NULL, leg_title = NULL, POS="stack"){
+  
+  g = ggplot(D, aes_string(X, Y, fill = FILL)) + geom_bar(stat = "identity", position = POS)
+  
+  if (!is.null(facet)){
+    g = g + facet_grid(facet)
+  }
+  
+  g = g+ labs(y = hori_title, x = vert_title)
+  
+  g = g + coord_flip()
+  
+  if (!is.null(pal) & !is.null(leg_title)){
+    g = g + scale_fill_manual(name = leg_title, values = pal)
+  }
+  
+  
+  
+  g = berl_style(g)
+  
+  
+  g = g + guides(fill = guide_legend(reverse = TRUE))
+  
+  
+  return(g)
+  
+}
+
+```
+
+
+# EI_shade: function to shade by emisions intensity
+
+```{r}
+
+
+EI_shade = function(g){
+  
+  
+  ALP_VAL = 0.0065
+  
+  high_top_lim = 27.3
+  med_top_lim = 24.5
+  low_top_lim = 12.5
+  
+  
+  g = g + geom_rect(ymin = 0, ymax = +Inf, xmin = med_top_lim,xmax =high_top_lim, fill = berl_pal[1], alpha = ALP_VAL)
+  
+  g = g + geom_rect(ymin = 0, ymax = +Inf, xmin = low_top_lim,xmax = med_top_lim, fill = berl_pal[2], alpha = ALP_VAL)
+  
+  g = g + geom_rect(ymin = 0, ymax = +Inf, xmin = 0,xmax = low_top_lim, fill = berl_pal[3], alpha = ALP_VAL)
+  
+  return(g)
+}
+
+
+
+
+```
+
+
+
+# Settings
+
+```{r}
+
+
+figfmt = ".png"
+
+global_figfmt = ".png"
+
+#use the 26 Sector approach (which further dissaggregates some of the service sectors)
+use_26Sector_appproach = T
+
+
+write_results_to_xls = T
+
+
+default_export_width_cm = 20
+
+mabb = "M\u101ori"
+
+
+```
+
+
+# ------------------------------------
+# folder and file locations
+# ------------------------------------
+
+```{r}
+
+
+#Set the output directory
+
+plotdir = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Analysis/plots/2021_07_14/"
+
+#Set the root data folder
+
+datadir = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/data/"
+
+gisdir = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/GIS/"
+#Set the root analysis folder
+
+analdir = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/analysis/"
+
+#set the Output Spreadsheet
+xls_out_fn = "LP005-GHG-MaoriEconomy-Results.xlsx"
+xls_out_ffn = paste0(analdir,xls_out_fn)
+
+# write.xlsx(Rohe_to_RC, xls_out_ffn, sheetName = "New", 
+#   col.names = TRUE, row.names = TRUE, append = FALSE)
+# 
+
+
+# path for the Spreadsheet that reconciles the Sectors between Berl and the I&H data set
+# and calculates emissions for the Berl Sectors
+
+if (use_26Sector_appproach){
+  
+  ffn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Analysis/GDP_and_Emissions_Merge_MAIN_26Sectors.xlsx"
+  
+  
+}else{
+  
+  ffn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Analysis/GDP_and_Emissions_Merge_MAIN.xlsx"
+  
+}
+
+
+# path of the I&H Regional CSV File
+
+ems_ih_by_reg_dn = paste0(datadir, "GHG Emissions Industry Household/")
+# ems_ih_by_reg_fn = "greenhouse-gas-emissions-by-region-industry-and-household-year-en.xlsx"
+ems_ih_by_reg_fn = "greenhouse-gas-emissions-by-region-industry-and-household-year-ended-2018-csv.csv"
+ems_ih_by_reg_ffn = paste0(ems_ih_by_reg_dn,ems_ih_by_reg_fn)
+file.exists(ems_ih_by_reg_ffn)
+
+#Path for the 2018 Emissions Inventory CSV File
+
+NZEI_dn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/em_inv/NZ_GHG_Emissions-1990-2018/"
+NZEI_fn = "new-zealands-greenhouse-gas-emissions-1990-2018.csv"
+NZEI_ffn = paste0(NZEI_dn, NZEI_fn)
+
+#Path for the LINZ Territorial Authority Shape File
+
+TA_dn = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/statsnzterritorial-authority-2019-generalised-SHP/'
+
+TA_fn = 'territorial-authority-2019-generalised.shp'
+
+TA_ffn = paste0(TA_dn, TA_fn)
+
+# Path for the NZ Coastline Shape File
+NZ_coast_dn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/NZ Coastline/"
+
+# NZ_coast_fn = "nz-coastlines-topo-1500k.shp"
+NZ_coast_fn = "NZ_Coastline_properpolygon.shp"
+NZ_coast_fn = "nz-coastlines-and-islands-polygons-topo-1500k.shp"
+NZ_coast_ffn = paste0(NZ_coast_dn, NZ_coast_fn)
+
+# Output path for the Rohe Shape File Created by Merging the TA Shape File
+Rohe_Shape_ffout = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/spatial/rohe/rohe.shp"
+
+# The LINZ Regional Council Boundary Map
+RCs_dn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/NZ_Geospatial_Data/regional_councils/"
+
+RCs_fn = "regional-council-2020-generalised.shp"
+RCs_ffn = paste0(RCs_dn, RCs_fn)
+
+Assets_dn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/Assets/"
+
+Assets_fn = "Maori Asset Base for Andrew.xlsx"
+
+Assets_ffn = paste0(Assets_dn,Assets_fn)
+
+GDP_Employment_ffn = paste0(datadir, "gdp/GDP and Employment for Andrew.xlsx")
+
+
+
+# location of the LUMxML (LUCAS LUM x Maori Land Layer) generated in ML_GHG.Rmd
+LUMxML_stats_ffn = paste0(analdir, "LUMxML_stats.csv")
+
+
+
+DP0012_proj_folder = 'D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/Development Projects/DP-0012-Berl-MaorilLandEmissions/'
+
+DP0012_datadir = paste0(DP0012_proj_folder, 'data/')
+
+DP0012_rohe_order = readRDS(paste0(DP0012_datadir,"rohe_order.rds"))
+DP0012_LUCNA_order = readRDS(paste0(DP0012_datadir,"LUCNA_order.rds"))
+
+
+rohe_levels_with_accents_ffn = paste0(datadir,"rohe_levels_with_accents.RDS")
+
+
+```
+
+
+
+
+# Palettes & Orders
+
+```{r}
+
+# BERL Standard Palette
+Berl_Std_Palette_ffn =  "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/berl data/berl_standard_palette.csv"
+
+Berl_Std_Palette = read_csv(Berl_Std_Palette_ffn) %>% 
+  mutate(berl_pal = rgb2hex(R,G,B))
+
+berl_pal = Berl_Std_Palette %>% pull(berl_pal)
+
+ncol = length(berl_pal)
+df = data.frame(COL = as.factor(seq(1,ncol)), WID = rep(5,ncol))
+
+
+#create a dummy bar chat to check the Berl colours
+
+g<- ggplot(df, aes(x="", y=WID, fill=COL))+
+  geom_bar(width = 1, stat = "identity")
+g
+
+g <- g + coord_polar("y", start=0)
+g <- g + scale_fill_manual(values=berl_pal)
+g
+
+
+#Sector Palettes (Based on Berl Palette)
+pal_7sec = rev(berl_pal[c(1,5,9,6,2,12,8)])
+pal_6sec = rev(berl_pal[c(5,9,6,2,12,8)])
+
+#read the *.RDS file which specifies the order by which the BErl palette is used to code the sectors
+Order_7sec = readRDS(paste0(datadir, "Order_7sec.RDS"))
+
+# Gas Palettes (Based on Berl Palette)
+pal_gas = berl_pal[c(6,1,9,12)]
+gas_order = c("CO2","CH4","N2O","Fgas")
+
+
+#rohe_order (all rohe with accents) North to South
+
+rohe_levels_with_accents = readRDS(rohe_levels_with_accents_ffn)
+
+
+```
+
+
+
+
+# Read the Reconciled Sector Order
+
+```{r}
+
+if (use_26Sector_appproach){
+  
+  RC_Sector_Order_dn = datadir
+  RC_Sector_Order_fn = "RC_Sector_Order_26Sector.RDS"
+  RC_Sector_Order_ffn = paste0(RC_Sector_Order_dn,RC_Sector_Order_fn)
+  
+  # RC_Sector_Order = D$Sector[c(2,3,1,6,5,4,7,8,seq(9,26))]
+  # saveRDS(RC_Sector_Order, RC_Sector_Order_ffn)
+  
+  
+  RC_Sector_Order = readRDS(RC_Sector_Order_ffn)
+  
+  
+}else{
+  
+  RC_Sector_Order_dn = datadir
+  RC_Sector_Order_fn = "RC_Sector_Order.RDS"
+  RC_Sector_Order_ffn = paste0(RC_Sector_Order_dn,RC_Sector_Order_fn)
+  RC_Sector_Order = readRDS(RC_Sector_Order_ffn)
+  
+}
+
+
+```
+
+
+#==========================================
+
+# FIGURE DATA PREP STARTS HERE
+
+#==========================================
+
+
+# ==============================
+# National Analysis
+# ==============================
+
+# --------------------------
+# Read and prepare data
+# --------------------------
+
+
+
+#------------------------
+#-->----<  FIGURE 2  DONUT PLOTS OF EMs PROFILE >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 2 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+#here the prefix "TOM" refers to the Maori Economy (Te Ohanga Maori)
+#here the prefix "AOT" refers to the Whole Economy (Aotearoa)
+
+if (use_26Sector_appproach){
+  range2read = "Top-Down-Approach_v1!B3:AC29"
+}else{
+  range2read = "Top-Down-Approach_v1!B3:AC25"
+}
+
+D = read_excel(path = ffn,  range = range2read)
+
+
+D %>% select(`Reconciled Sectors`,`EML-3T`)
+
+names(D)
+# names(D) = c("Sector", "Maori_Share","GDP_TOM","GDP_AOT",
+# "TCO2e_emissions_AOT","CO2_emissions_AOT","CH4_emissions_AOT","N2O_emissions_AOT",
+# "Fgas_emissions_AOT","PR_Sector_L0_Code", "My_Sector_L1_Code","berl_sector_abbrev")
+
+D = D %>% 
+  dplyr::rename(
+    "Sector" = "Reconciled Sectors",
+    "Maori_Share" = "Share of Economy",
+    "GDP_TOM" = "GDP-Maori",
+    "GDP_AOT" = "GDP-All-NZ",
+    "TCO2e_emissions_AOT" = "CO2-e Emissions",
+    "CO2_emissions_AOT" = "CO2-Emissions",
+    "CH4_emissions_AOT" = "CH4-Emissions",
+    "N2O_emissions_AOT" = "N2O-Emissions",
+    "Fgas_emissions_AOT" = "Fl-Gas Emissions",
+    "PR_Sector_L0_Code" = "PR_L0_code",
+    "My_Sector_L1_Code"     = "My_L1_code",
+    "berl_sector_abbrev" = "Sector_berl_abbrev" 
+    
+  ) %>% 
+  mutate(
+    TCO2e_emissions_TOM = Maori_Share * TCO2e_emissions_AOT,
+    TCO2e_emissions_NM = TCO2e_emissions_AOT - TCO2e_emissions_TOM,
+    TCO2e_intensity_AOT = TCO2e_emissions_AOT/GDP_AOT)
+
+
+
+
+
+if (!use_26Sector_appproach){D$Sector[18] <- "Professional/Admin Services"}
+
+#For the whole NZ Economy, keep top 7 emitting sectors and lump the rest as "Other"
+
+ncats = 7  # including a catogory called other
+
+D_AOT = D %>% 
+  arrange(desc(TCO2e_emissions_AOT)) %>% 
+  mutate(rank = dense_rank(desc(TCO2e_emissions_AOT)),
+         rankpos = ifelse(rank<ncats,rank,ncats)) %>% 
+  group_by(rankpos) %>% 
+  summarise(
+    Sector = first(Sector),
+    CO2_emissions = sum(TCO2e_emissions_AOT)) %>% 
+  filter(!is.na(rankpos))
+
+# recategorise the lower emitting sectors as "Other"
+D_AOT$Sector[ncats] = "Other"
+
+#For the  Maori Economy, keep top 7 emitting sectors and lump the rest as "Other"
+
+D_TOM = D %>% 
+  arrange(desc(TCO2e_emissions_TOM)) %>% 
+  mutate(rank = dense_rank(desc(TCO2e_emissions_TOM)),
+         rankpos = ifelse(rank<ncats,rank,ncats)) %>% 
+  group_by(rankpos) %>% 
+  summarise(
+    Sector = first(Sector),
+    CO2_emissions = sum(TCO2e_emissions_TOM)) 
+
+# recategorise the lower emitting sectors as "Other"
+D_TOM$Sector[ncats] = "Other"
+
+#For the whole  Economy, keep top 7 emitting sectors and lump the rest as "Other"
+
+D_AOT_GDP = D %>% 
+  arrange(desc(GDP_AOT)) %>% 
+  mutate(rank = dense_rank(desc(GDP_AOT)),
+         rankpos = ifelse(rank<ncats,rank,ncats)) %>% 
+  group_by(rankpos) %>% 
+  summarise(
+    Sector = first(Sector),
+    GDP = sum(GDP_AOT)) %>% 
+  filter(!is.na(rankpos)) %>% 
+  arrange(desc(GDP))
+
+
+# recategorise the lower GDP sectors as "Other"
+D_AOT_GDP$Sector[ncats] = "Other"
+
+D_TOM_GDP =D %>% 
+  select(Sector,GDP_TOM) %>% 
+  dplyr::arrange(desc(GDP_TOM)) %>% 
+  mutate(rank = dense_rank(desc(GDP_TOM)),
+         rankpos = ifelse(rank<ncats,rank,ncats)) %>% 
+  group_by(rankpos) %>% 
+  summarise(
+    Sector = first(Sector),
+    GDP = sum(GDP_TOM)) %>% 
+  filter(!is.na(rankpos)) 
+
+# recategorise the lower GDP sectors as "Other"
+D_TOM_GDP$Sector[ncats] = "Other"
+
+#throw dairy and s&b back in
+
+D_TOM_GDP_add = data.frame(
+  rankpos = c(20,21),
+  Sector = c("Sheep and beef farming","Dairy"),
+  GDP = c(D$GDP_TOM[D$Sector=="Sheep and beef farming"], D$GDP_TOM[D$Sector=="Dairy"]))
+
+
+# Output the Data to the Results Spreadsheet
+
+if (write_results_to_xls){
+  write.xlsx(D, xls_out_ffn, sheetName = "Emissions and GDP",col.names = TRUE, row.names = TRUE, append = F)
+  
+  
+  write.xlsx(D_TOM, xls_out_ffn, sheetName = "Maori Emissions",col.names = TRUE, row.names = TRUE, append = T)
+  write.xlsx(D_AOT, xls_out_ffn, sheetName = "All NZ Emissions",col.names = TRUE, row.names = TRUE, append = T)
+  
+  write.xlsx(D_TOM_GDP, xls_out_ffn, sheetName = "Maori GDP",col.names = TRUE, row.names = TRUE, append = T)
+  write.xlsx(D_AOT_GDP, xls_out_ffn, sheetName = "All NZ GDP",col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 2 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+Fig 2- Donut plots of the Emissions Profile of the All-NZ and Maori Economy
+
+Data Sets Used: D_AOT, D_TOM
+
+
+```{r}
+
+fignum = 2
+figdesc = "-FIGURE-02-core_em_profile_donut"
+figfmt = global_figfmt
+figfmt = ".svg"
+
+transparent_option=F
+
+
+df <- D_AOT
+# fig1a <- df %>% plot_ly(labels = ~Sector, values = ~CO2_emissions, colors = "Dark2")
+fig2a <- df %>% plot_ly(labels = ~Sector, values = ~CO2_emissions)
+
+
+fig2a <- fig2a %>% add_pie(hole = 0.5, 
+                           domain = list(
+                             x = c(0,0.48), 
+                             y = c(0,1)),
+                           marker = list(
+                             colors = berl_pal,
+                             line = list(
+                               color = '#FFFFFF', 
+                               width = 1)))
+
+fig2a <- fig2a %>% layout(title = "CO2-e emissions - All NZ",  showlegend = F,
+                          
+                          xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = F),
+                          yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = F))
+
+
+fig2a
+
+
+
+
+
+fig2 = fig2a %>% add_pie(data = D_TOM,hole = 0.5, labels = ~Sector, values = ~CO2_emissions,domain = list(x = c(0.52,1), y = c(0,1)),marker = list(
+  colors = berl_pal,
+  line = list(
+    color = '#FFFFFF', 
+    width = 1)))
+
+fig2 = fig2 %>% layout(title = "Sector Emissions", showlegend = T, legend = list(x = 0, y = 0,orientation = 'v'))
+
+fig2 = fig2 %>% layout(paper_bgcolor='transparent')
+
+if (transparent_option){
+  l <- list(
+    font = list(
+      family = "sans-serif",
+      size = 12,
+      color = "#FFFFFF"))
+}else{
+  l <- list(
+    font = list(
+      family = "sans-serif",
+      size = 12,
+      color = "black"))
+}
+
+fig2 = fig2 %>% layout(legend=l)
+fig2
+
+
+saveplot = F
+
+if (saveplot){saveplotly(p = fig2, fignum,figdescr, figfmt, plotdir = plotdir)}
+
+
+
+if (write_results_to_xls){
+  
+  #save the data for this figure to the results spreadsheet
+  
+  figdata = D_TOM %>% bind_cols(D_AOT)
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+#### Cross Checks - make sure GDP and emissions sums are correct
+
+```{r}
+
+# Cross Checks
+
+D_GDP_Sums = D %>% summarise(across(contains("GDP"),sum))
+D_GDP_Sums
+
+D_TCO2e_Ems_Sums = D %>% summarise(across(contains("TCO2e"),sum))
+D_TCO2e_Ems_Sums
+
+# - Checks Out OK!
+
+
+```
+
+
+# BERL Sector Key - the is a key that relates the Berl 29 Sectors from the TOM Report to the Reconciled Sectors (the 26 Sectors used for this analysis)
+
+```{r}
+
+Berl_Sector_Key = read_excel(path = ffn,  range = "Te Ohanga Maori Sectors!A2:P31") %>% 
+  select(Industry, `Reconciled Sector Code`,`Reconciled Sector Name`) %>% 
+  mutate(levels = as.numeric(gsub("RC_Cat_L","", `Reconciled Sector Code`))) %>% 
+  mutate(`Reconciled Sector Name` = str_replace_all( `Reconciled Sector Name`,"Telecommunications, financial, rental, professional, and administrative services", "Professional/Admin Services")) %>% 
+  mutate(`Reconciled Sector Name` = str_replace_all( `Reconciled Sector Name`,"Food M","Food m"))
+
+unique(Berl_Sector_Key$`Reconciled Sector Name`)
+
+if (write_results_to_xls){
+  write.xlsx(Berl_Sector_Key, xls_out_ffn, sheetName = "Berl_Sector_Key",col.names = TRUE, row.names = TRUE, append = T)
+}
+
+```
+
+
+# Create some Overall Stats
+
+```{r}
+
+TOTAL_GDP_AOT = sum(D$GDP_AOT, na.rm = T)
+TOTAL_GDP_TOM = sum(D$GDP_TOM, na.rm = T)
+TOTAL_Ems_AOT = sum(D$TCO2e_emissions_AOT, na.rm = T)
+TOTAL_Ems_TOM = sum(D$TCO2e_emissions_TOM, na.rm = T)
+
+
+
+
+Maori_Share_GDP = TOTAL_GDP_TOM/TOTAL_GDP_AOT
+Maori_Share_Ems = TOTAL_Ems_TOM/TOTAL_Ems_AOT
+
+Emissions_Intensity_AllSectors_AOT = TOTAL_Ems_AOT/TOTAL_GDP_AOT
+Emissions_Intensity_AllSectors_TOM = TOTAL_Ems_TOM/TOTAL_GDP_TOM
+
+
+TOTAL_CH4_Ems_AOT = sum(D$CH4_emissions_AOT, na.rm = T)
+
+TOTAL_CH4_Ems_TOM = D %>% 
+  mutate(CH4_emissions_TOM = CH4_emissions_AOT * Maori_Share) %>% 
+  select(CH4_emissions_TOM) %>% 
+  summarise(CH4_emissions_TOM = sum(CH4_emissions_TOM) ) %>% 
+  pull()
+
+TOTAL_non_CH4_Ems_AOT = D %>% 
+  mutate(NON_CH4 = CO2_emissions_AOT + N2O_emissions_AOT + Fgas_emissions_AOT) %>% 
+  summarise(NON_CH4 = sum(NON_CH4)) %>% 
+  select(NON_CH4) %>% 
+  pull()
+
+
+
+TOTAL_non_CH4_Ems_TOM = D %>% 
+  mutate(NON_CH4 = CO2_emissions_AOT*Maori_Share + N2O_emissions_AOT*Maori_Share + Fgas_emissions_AOT*Maori_Share) %>% 
+  summarise(NON_CH4 = sum(NON_CH4)) %>% 
+  select(NON_CH4) %>% 
+  pull()
+
+
+# check that these add up to the total CO2-e
+floor(TOTAL_non_CH4_Ems_AOT + TOTAL_CH4_Ems_AOT) == floor(TOTAL_Ems_AOT)
+floor(TOTAL_non_CH4_Ems_TOM + TOTAL_CH4_Ems_TOM) == floor(TOTAL_Ems_TOM)
+
+
+# calculate the Maori share of CH4 emissions
+Maori_Share_CH4_Ems = TOTAL_CH4_Ems_TOM/TOTAL_CH4_Ems_AOT
+Maori_Share_non_CH4_Ems = TOTAL_non_CH4_Ems_TOM/TOTAL_non_CH4_Ems_AOT
+
+#calculate the are of the circles for the bubble diagrams
+diam = 14.66 # this is the diameter of the whole economy circle in the Powerpoint
+rad = diam/2
+area = pi*rad^2
+
+area_M_economy = Maori_Share_GDP*area
+diam_M_economy = 2*sqrt((area_M_economy/pi))
+
+area_M_emission = Maori_Share_Ems*area
+diam_M_emissions = 2*sqrt((area_M_emission/pi))
+
+area_M_CH4_emission = Maori_Share_CH4_Ems*area
+diam_M_CH4_emissions = 2*sqrt((area_M_CH4_emission/pi))
+
+area_M_non_CH4_emission = Maori_Share_non_CH4_Ems*area
+diam_M_non_CH4_emissions = 2*sqrt((area_M_non_CH4_emission/pi))
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 3 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+D = D %>% mutate(Sector = str_replace_all(Sector, "Food M","Food m"))
+
+RC_Sector_Order_fig3 = gsub("ood M", "ood m", RC_Sector_Order)
+RC_Sector_Order = gsub("ood M", "ood m", RC_Sector_Order)
+D$Sector = factor(D$Sector, levels = rev(RC_Sector_Order_fig3))
+
+
+D_Tot_Ems = D %>% 
+  select(Sector, "Non-M\u101ori" = TCO2e_emissions_NM, "M\u101ori" =TCO2e_emissions_TOM)
+
+D_Tot_Ems$Sector = factor(D_Tot_Ems$Sector, levels = rev(RC_Sector_Order_fig3))
+
+D_Tot_Ems_lng = D_Tot_Ems %>% gather(key,value,-Sector)
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 3 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+fignum = 3
+figdesc = "-COMPOSITE-Emissions_by_sector_stacked_by_M_vs_NM-ggplot"
+figfmt = global_figfmt
+
+
+
+g1 = ggplot(D_Tot_Ems_lng, aes(Sector, value, fill = key)) + geom_bar(stat = "identity") + coord_flip()
+
+g1 = g1 + labs(y = expression(paste("Emissions (kt ",CO[2],"-e)")))
+
+g1 = g1 + scale_fill_manual(values = berl_pal[c(1,2)], labels = c("M\u101ori","Non-M\u101ori"))
+
+g1 = berl_style(g1)
+g1 = g1 + theme(legend.title = element_blank(), legend.position = c(.76,.2))
+
+g1
+
+
+figfmt = ".png"
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g1, width = 22, height = 12, units  = 'cm')
+
+
+
+
+#open this file in Inkscape and remove extra legend and vertical axis label
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 3 Write to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  D_Tot_Ems_wd = D_Tot_Ems_lng %>% 
+    spread(key,value)
+  
+  write.xlsx(D_Tot_Ems_wd, xls_out_ffn, sheetName = "Fig-03",col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 4  : DONUT GHG BREAKDOWN >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 4 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+D_GHG_all = D %>%
+  mutate(
+    CO2_emissions_TOM = Maori_Share * CO2_emissions_AOT,
+    CH4_emissions_TOM = Maori_Share * CH4_emissions_AOT,
+    N2O_emissions_TOM = Maori_Share * N2O_emissions_AOT,
+    Fgas_emissions_TOM = Maori_Share * Fgas_emissions_AOT,
+    CO2_emissions_NM = CO2_emissions_AOT - CO2_emissions_TOM,
+    CH4_emissions_NM = CH4_emissions_AOT - CH4_emissions_TOM,
+    N2O_emissions_NM = N2O_emissions_AOT - N2O_emissions_TOM,
+    Fgas_emissions_NM = Fgas_emissions_AOT - Fgas_emissions_TOM
+  ) %>%
+  summarise(across(contains('emissions'), sum)) %>%
+  gather(key, value) %>%
+  mutate(
+    Gas = case_when(
+      grepl('^CO2',key) ~ "Carbon dioxide (CO<sub>2</sub>)",
+      grepl('^CH4',key) ~ "Methane (CH<sub>4</sub>)",
+      grepl('^N2O',key) ~ "Nitrous oxide (N<sub>2</sub>O)",
+      grepl('^Fgas',key) ~ "Fluorine gases"
+    ),
+    GRP = case_when(
+      grepl('AOT',key) ~ "AOT",
+      grepl('TOM',key) ~ "TOM",
+      grepl('NM',key) ~ "NM"
+    ),
+    
+  ) %>%
+  filter(!is.na(Gas))
+
+
+D_GHG_AOT = D_GHG_all %>% filter(GRP=='AOT')
+D_GHG_TOM = D_GHG_all %>% filter(GRP=='TOM')
+D_GHG_NM = D_GHG_all %>% filter(GRP=='NM')
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 4 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+
+Figure 4. Twin pie chart showing total CO2-e for Māori economy and New Zealand economy
+
+broken down by gas (CO2, CH4, N2O and others) 
+
+Data Set(s) Used: D_GHG_AOT, D_GHG_TOM
+Formatting and Ordering Data Sets: pal_gas
+
+
+```{r}
+
+fignum = 4
+figdesc = "emissions_by_GHG"
+figfmt = global_figfmt
+figfmt = ".svg"
+
+
+
+
+
+fig4a <- D_GHG_AOT %>% plot_ly(labels = ~Gas, values = ~value,
+                               textinfo = 'percent',marker = list(colors = pal_gas))
+
+
+fig4a <- fig4a %>% add_pie(hole = 0.5, domain = list(x = c(0,0.48), y = c(0,1)))
+fig4a <- fig4a %>% layout(
+  # title = "CO2-e emissions - Breakdown by Gas",
+  showlegend = F,
+  xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = F),
+  yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = F)
+)
+
+
+fig4a
+
+
+
+# fig4 = fig4a %>% add_pie(data = D_GHG_TOM,hole = 0.6, labels = ~Gas, values = ~value,textposition = 'inside',
+#                          textinfo = 'label+percent',domain = list(x = c(0.52,1), y = c(0,1)))
+
+fig4 = fig4a %>% add_pie(data = D_GHG_TOM,hole = 0.5, labels = ~Gas, values = ~value,
+                         textinfo = 'percent',domain = list(x = c(0.52,1), y = c(0,1)))
+
+# fig4 = fig4a %>% add_text()
+
+fig4 = fig4 %>% layout(showlegend = T, legend = list(x = .3, y = .05,orientation = 'h'))
+
+fig4 = fig4 %>% layout(paper_bgcolor='transparent')
+
+
+# a <- list(
+#   x = .25,
+#   y = .5,
+#   text = "hello")
+
+
+fig4 = fig4 %>% add_annotations(
+  xref = "paper",
+  yref = "paper",
+  x = .2,
+  y = 1.05,
+  text = "All NZ",
+  showarrow = F
+)
+fig4 = fig4 %>% add_annotations(
+  xref = "paper",
+  yref = "paper",
+  x = .78,
+  y = 1.05,
+  text = "M\u101ori",
+  showarrow = F
+)
+
+fig4
+
+saveplot=T
+
+if (saveplot){
+  saveplotly(p = fig4, fignum,figdescr, figfmt, plotdir = plotdir)
+  
+  
+  
+  fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+  fig_ffn = paste0(plotdir, fig_fn)
+  
+  
+}
+# ggsave(fig_ffn,g)
+
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 4 Write to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  figdata = D_GHG_TOM %>% 
+    bind_rows(D_GHG_AOT) %>% 
+    select(GRP, Gas,value) %>% 
+    spread(GRP,value) %>% 
+    rename(
+      "M\u101ori"="TOM",
+      "All NZ"="AOT") %>% 
+    mutate(
+      Gas_symb = case_when(
+        str_detect(Gas, "Carbon dioxide")  ~ "CO2",
+        str_detect(Gas, "Methane ")  ~ "CH4",
+        str_detect(Gas, "Nitrous")  ~ "N2O",
+        str_detect(Gas, "Fluorine")  ~ "Fl Gases"),
+      Gas = Gas_symb) %>% 
+    select(Gas, `All NZ`  , "Maori")
+  
+  
+  
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Regional Analysis for Rohe Based Figures
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+#read the Linz-NZ-coastline data so we can clip the RC data
+NZ_coast = st_read(NZ_coast_ffn)
+
+#read the shape file of the RC Boundaries
+RCs = st_read(RCs_ffn) %>% 
+  mutate(Region = str_replace_all(REGC2020_1, " Region",""),
+         Region = str_replace_all(Region, "Manawatu-Whanganui","Manawat\u016B-Whanganui"))
+
+#Clip the RC Boundaries to the NZ Coastline
+RCs_nice = st_intersection(RCs, NZ_coast) %>% 
+  group_by(Region) %>% 
+  summarise() %>% 
+  filter(!grepl("Area ", Region))
+
+#read the previously created file relating the Rhoe to the Berl Palette (as per the Te Ohanga Maori report)
+rohe_rgb = read_csv("D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/Rohe_RGB.csv")
+
+# rohe_rgb$Rohe = gsub("\\?","a",rohe_rgb$Rohe)
+
+#create a replacement matrix so that the Macrons can be added to the Rohe Names
+rohe_with_accents = c(
+  "Takitimu" =  "T\u101kitimu",
+  "Te Tai Hauauru" =  "Te Tai Hau\u101uru",
+  "Tamaki Makaurau" =  "T\u101maki Makaurau",
+  "Tair\u101whiti" =  "Tair\u101whiti",
+  "Te Whanganui a Tara" = "Te Whanganui \u101 Tara",
+  "Te Tai Hauauru" = "Te Tai Hauauru",
+  "Kurahaupo" = "Kurahaup\u014D"
+)
+
+
+# modify the rohe RGB data frame so that it containes the hex version of the Rohe colors and the # Rohe names with the macrons
+rohe_rgb = rohe_rgb %>% 
+  mutate(hex = rgb2hex(R,G,B),
+         Rohe = str_replace_all(Rohe,rohe_with_accents))
+
+# isolate the hex pallete from the rohe_rgb dataframe
+rohe_palette = rohe_rgb %>% pull(hex)
+
+# isolate the Rohe names from the rohe_rgb dataframe
+rohe_name = rohe_rgb %>% pull(Rohe)
+
+#read the Linz-NZ-coastline data so we can clip the RC data
+NZ_coast = st_read(NZ_coast_ffn)
+
+
+#read the TLA / Rohe Key back up file
+TLA_ROHE_RA_key_dn = datadir
+TLA_ROHE_RA_key = read_csv(file = paste0(TLA_ROHE_RA_key_dn,"TLA_ROHE_RA_key_backup.csv")) %>% 
+  select(TLA, ROHE,ROHE_abbrev, Region) %>% 
+  mutate(ROHE_with_acc = str_replace_all(ROHE,rohe_with_accents))
+
+
+#define the rohe key binary file
+TLA_ROHE_RA_key_fn = "TLA_ROHE_RA_key.rds"
+TLA_ROHE_RA_key_ffn = paste0(TLA_ROHE_RA_key_dn,TLA_ROHE_RA_key_fn)
+
+# Keep this commented-out code below in case we need to recreate the TLA_ROHE_RA_key
+# 
+# TLA_ROHE_RA_key_ffn_backup = paste0(TLA_ROHE_RA_key_dn,"TLA_ROHE_RA_key_backup.rds")
+# 
+# saveRDS(TLA_ROHE_RA_key, TLA_ROHE_RA_key_ffn)
+# saveRDS(TLA_ROHE_RA_key, TLA_ROHE_RA_key_ffn_backup)
+# 
+# write.csv(TLA_ROHE_RA_key, file = paste0(TLA_ROHE_RA_key_dn,"TLA_ROHE_RA_key_backup.csv"))
+
+
+#Read the the Rohe Data from the binary file
+TA_Rohe = readRDS(TLA_ROHE_RA_key_ffn)
+
+# check if the KURAH Rohe exists
+# TA_Rohe %>% filter(ROHE_abbrev=="KURAH")
+
+# Read the TLA Shape File from LINZ
+TAs = st_read(TA_ffn)
+
+# Match up the Rohe Data with the corresponding TLA
+TAs_mrg = TAs %>% 
+  select(TLA = TA2019_V_1 , everything()) %>% 
+  left_join(TA_Rohe, by = 'TLA') 
+
+# Create a definitive list of the Rohe, 5 letter Rohe abbreviations and the Rohe names with accents
+ROHE_key = as_tibble(TAs_mrg) %>% 
+  select(contains('ROHE'), Area = AREA_SQ_KM, -geometry) %>% 
+  group_by(ROHE) %>% 
+  summarise(across(contains("ROHE"), first)) %>% 
+  filter(ROHE != "")
+
+# save the ROHE_Key data to disk
+ROHE_key_dn = datadir
+ROHE_key_fn = "ROHE_key.rds"
+ROHE_key_ffn = paste0(ROHE_key_dn,ROHE_key_fn)
+saveRDS(ROHE_key,file = ROHE_key_ffn)
+
+
+# group together (spatially) the TLAS that belong to the same Rohe
+Rohe = TAs_mrg %>% 
+  group_by(ROHE) %>% 
+  summarise() %>% 
+  filter(ROHE != "") %>% 
+  left_join(ROHE_key, by = "ROHE")
+
+
+# order the Rohe from North to South within the Rohe dataframe to create more logical legends in plots
+ROHE_levels = (ROHE_key$ROHE_with_acc)[c(7,4,10,5,2,3,1,9,6,8,11)]
+Rohe$ROHE_with_acc = factor(Rohe$ROHE_with_acc,ROHE_levels)
+
+#write the Rohe spatial data as a Shape File to disk
+st_write(Rohe,'Rohe_Shape.shp',append=F)
+
+# create a tidier version of the Rohe data by clipping the shape to the NZ coastline
+Rohe_tidy = Rohe %>% 
+  st_intersection(NZ_coast, Rohe) %>% 
+  group_by(ROHE) %>% 
+  summarise() %>% 
+  left_join(ROHE_key, by = "ROHE")
+
+# order this as well
+Rohe_tidy$ROHE_with_acc = factor(Rohe_tidy$ROHE_with_acc,ROHE_levels)
+
+# and write to disk
+st_write(Rohe_tidy,'Rohe_tidy_Shape.shp',append=F)
+
+
+## Preparare the Regional Emissions for Merging - This section uses the regionally disaggregated I & H GHG Data from StatsNZ and Merges it with the Regional Economic Data from BERL's TOM Report
+
+
+```
+
+### Step 1: aggregate the emissions by Rohe
+
+```{r}
+
+
+#grab the regional emissions data
+
+# D_reg_contents = read_excel(ems_ih_by_reg_ffn,range = "Contents!A3:B25")
+D_reg = read_csv(ems_ih_by_reg_ffn)
+
+#What do the anzsic descriptors look like?
+unique(D_reg$anzsic_descriptor)
+
+D_reg_18_CO2e = D_reg %>% filter(year==2018 & gas == "Carbon dioxide equivalents")
+
+D_reg_18 = D_reg %>% filter(year==2018)
+
+
+D_reg_18 %>% distinct(gas)
+
+
+D_reg_18_CO2e_sectors = D_reg_18_CO2e %>% distinct(anzsic_descriptor ) %>% pull(anzsic_descriptor )
+
+anzsic_to_keep =  c("Agriculture","Forestry, fishing, and mining","Manufacturing",
+                    "Electricity, gas, water, and waste services","Construction",
+                    "Transport, postal, and warehousing", "Services excluding transport, postal, and warehousing")
+
+
+D_reg_18_CO2e_filt = D_reg_18_CO2e %>% filter(anzsic_descriptor %in% anzsic_to_keep)
+
+# D_reg_18_CO2e_filt %>% distinct(anzsic_descriptor) %>% pull()
+
+
+
+# D_reg_18_CO2e %>% distinct(region) %>% pull(region)
+# D_reg_18_CO2e %>% distinct(anzsic_descriptor ) %>% pull(anzsic_descriptor )
+
+Regional_Emission_Sectors = D_reg_18_CO2e %>% distinct(anzsic_descriptor ) %>% pull(anzsic_descriptor )
+Regional_Emission_Regions = D_reg_18_CO2e %>% distinct(region) %>% pull(region)
+
+
+#Tidy up the Region Names
+Rohe_to_RC = TA_Rohe %>% 
+  group_by(Region) %>% 
+  summarise(ROHE = first(ROHE), ROHE_abbrev = first(ROHE_abbrev)) %>% 
+  filter(Region != "") %>% 
+  mutate(Region = str_replace(Region,"Auckland Council","Auckland")) %>% 
+  mutate(Region = str_replace(Region,"Hawkes Bay","Hawke\\'s Bay"))
+
+Rohe_to_RC
+
+
+D_reg_18_CO2e
+
+
+#Create a definitive key to map Rohe to regions with a 5 letter Rohe Abreviation
+Region_Rohe_key = data.frame(Region = Regional_Emission_Regions) %>% left_join(Rohe_to_RC, by = 'Region')
+Region_Rohe_key$ROHE[Region_Rohe_key$Region=="Tasman/Nelson"] = "Te Tau Ihu"
+Region_Rohe_key$ROHE_abbrev[Region_Rohe_key$Region=="Tasman/Nelson"] = "TTIHU"
+
+
+# Now merge the EMissions data together
+
+# Step 1. Create a data table of each Rohe Then right join the Emissions Data
+Emissions_by_Rohe_and_Sector = Region_Rohe_key %>% 
+  right_join(D_reg_18_CO2e_filt, by = c("Region"= "region")) %>% 
+  group_by(ROHE, anzsic_descriptor) %>% 
+  summarise( 
+    ROHE_abbrev = first(ROHE_abbrev),
+    emissions = sum(data_val) ) %>% 
+  select(ROHE_abbrev, everything()) %>% 
+  mutate(
+    anzsic_descriptor = str_trim(anzsic_descriptor),
+    SECTOR_abbrev = 
+      case_when(
+        anzsic_descriptor == "Agriculture" ~ "AGR",
+        anzsic_descriptor == "Forestry, fishing, and mining" ~ "FFM",
+        anzsic_descriptor == "Manufacturing" ~ "MFG",
+        anzsic_descriptor == "Electricity, gas, water, and waste services" ~ "EGW",
+        anzsic_descriptor == "Construction" ~ "CON",
+        anzsic_descriptor == "Transport, postal, and warehousing" ~ "TPW",
+        anzsic_descriptor == "Services excluding transport, postal, and warehousing" ~ "OSV"
+      ),
+    ROHE_SECTOR_CODE = paste0(ROHE_abbrev,'_', SECTOR_abbrev)
+  )
+
+# unique(MRG_smy$anzsic_descriptor)
+
+
+Emissions_by_Rohe_and_Sector_wide = Emissions_by_Rohe_and_Sector %>% 
+  select(SECTOR_abbrev, ROHE, emissions) %>% 
+  spread(value=emissions,key = ROHE)
+
+
+write.csv(Emissions_by_Rohe_and_Sector_wide, paste0(analdir, "RegEms-Step-1-Emissions_by_Rohe_and_Sector.csv"))
+
+
+```
+
+### Step 2:  Prepare the Regional GDP data for Merging
+
+```{r}
+
+#The regional GDP Figures from Hugh
+
+Reg_GDP_dn = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/gdp/Regional-GDP-Maori/"
+
+Reg_GDP_fn = "Maori and NZ regional GDP - for Andrew.xlsx"
+
+Reg_GDP_ffn = paste0(Reg_GDP_dn, Reg_GDP_fn)
+
+
+D_Reg_GDP_TOM = read_excel(Reg_GDP_ffn, range = "GDP!B3:N10")
+names(D_Reg_GDP_TOM)[1] <- "Sector"
+D_Reg_GDP_AOT = read_excel(Reg_GDP_ffn, range = "GDP!B16:N23")
+names(D_Reg_GDP_AOT)[1] <- "Sector"
+
+D_Ind_Concord = read_excel(Reg_GDP_ffn, sheet = "Industry concordance", range = "A1:C507")
+
+
+
+#make the TOM GDP table long
+D_Reg_GDP_TOM_lng = D_Reg_GDP_TOM %>% 
+  # dplyr::rename(Sector = `Maori GDP`  ) %>% 
+  gather(key, value,-Sector) %>% 
+  filter(key != "NZ")
+
+#make the AOT GDP table long
+D_Reg_GDP_AOT_lng= D_Reg_GDP_AOT %>% 
+  # dplyr::rename(Sector = `NZ GDP`  ) %>% 
+  gather(key, value,-Sector) %>% 
+  filter(key != "NZ")
+
+#join the Long tables together 
+GDP_by_Rohe_and_Sector = D_Reg_GDP_AOT_lng %>% 
+  left_join(D_Reg_GDP_TOM_lng, by = c("Sector","key")) %>% 
+  dplyr::rename(ROHE = key, GDP_AOT = value.x, GDP_TOM = value.y) %>% 
+  mutate(
+    ROHE_no_accent = str_replace_all(ROHE,"\u101","a"),
+    ROHE_no_accent = str_replace_all(ROHE_no_accent,"\u14D","o")) %>% 
+  right_join(Region_Rohe_key, by = c("ROHE_no_accent"="ROHE")) %>% 
+  mutate(ROHE_abbrev = ifelse(ROHE_no_accent=="Kurahaupo","KURAH",ROHE_abbrev )) %>% 
+  mutate(
+    Sector = str_trim(Sector),
+    SECTOR_abbrev = 
+      case_when(
+        Sector == "Agriculture" ~ "AGR",
+        Sector == "Forestry, fishing, and mining" ~ "FFM",
+        Sector == "Manufacturing" ~ "MFG",
+        Sector == "Electricity, gas, water, and waste services" ~ "EGW",
+        Sector == "Construction" ~ "CON",
+        Sector == "Transport, postal, and warehousing" ~ "TPW",
+        Sector == "Services excluding transport, postal, and warehousing" ~ "OSV"
+      ),
+    ROHE_SECTOR_CODE = paste0(ROHE_abbrev,'_', SECTOR_abbrev)) %>% 
+  group_by(ROHE_SECTOR_CODE) %>% 
+  summarise(
+    ROHE = first(ROHE),
+    GDP_AOT = first(GDP_AOT),
+    GDP_TOM = first(GDP_TOM),
+    ROHE_abbrev  = first(ROHE_abbrev ),
+    SECTOR_abbrev  = first(SECTOR_abbrev ),
+    ROHE_SECTOR_CODE = first(ROHE_SECTOR_CODE))
+
+
+GDP_by_Rohe_and_Sector %>% filter(ROHE == "Waitaha")
+
+GDP_by_Rohe_and_Sector %>% group_by(ROHE) %>% summarise(GDP_TOM = sum(GDP_TOM))
+
+GDP_AOT_by_Rohe_and_Sector_wide = GDP_by_Rohe_and_Sector %>% 
+  select(ROHE, SECTOR_abbrev, GDP_AOT) %>% 
+  spread(value = GDP_AOT, key = ROHE)
+
+GDP_TOM_by_Rohe_and_Sector_wide = GDP_by_Rohe_and_Sector %>% 
+  select(ROHE, SECTOR_abbrev, GDP_TOM) %>% 
+  spread(value = GDP_TOM, key = ROHE)
+
+write.csv(GDP_AOT_by_Rohe_and_Sector_wide, paste0(analdir, "RegEms-Step-2a-GDP_AOT_by_Rohe_and_Sector_wide.csv"))
+
+
+write.csv(GDP_TOM_by_Rohe_and_Sector_wide, paste0(analdir, "RegEms-Step-2b-GDP_TOM_by_Rohe_and_Sector_wide.csv"))
+
+```
+
+### Step 3: Now Join the Regional Emissions Data with the Regional GDP Data
+
+```{r}
+
+Sector_Order = unique(Emissions_by_Rohe_and_Sector$anzsic_descriptor)[c(1,4,5,2,3,7,6)]
+
+ROHE_Order = unique(Emissions_by_Rohe_and_Sector$ROHE)[c(7,4,10,5,2,3,1,9,6,8,11)]
+
+GDP_by_Rohe_and_Sector_trim = GDP_by_Rohe_and_Sector %>% 
+  select(ROHE_SECTOR_CODE, GDP_AOT, GDP_TOM)  
+
+ROHE_abbrev_key = ROHE_key %>% select(ROHE_abbrev, ROHE_with_acc)
+
+Rohe_Emissions_and_GDP = Emissions_by_Rohe_and_Sector %>% 
+  left_join(GDP_by_Rohe_and_Sector_trim, by = "ROHE_SECTOR_CODE") %>% 
+  dplyr::rename(Ems_AOT = emissions) %>% 
+  mutate(
+    Share_TOM = GDP_TOM/GDP_AOT,
+    Ems_TOM = Share_TOM * Ems_AOT) %>% 
+  left_join(ROHE_abbrev_key, by = "ROHE_abbrev")
+
+Rohe_Emissions_and_GDP$ROHE = factor(Rohe_Emissions_and_GDP$ROHE, levels = ROHE_Order)
+
+Rohe_Emissions_and_GDP$anzsic_descriptor = factor(Rohe_Emissions_and_GDP$anzsic_descriptor, levels = Sector_Order)
+
+Rohe_Emissions_and_GDP_dn = analdir
+Rohe_Emissions_and_GDP_fn = "Rohe_Emissions_and_GDP.csv"
+Rohe_Emissions_and_GDP_ffn = paste0(Rohe_Emissions_and_GDP_dn,Rohe_Emissions_and_GDP_fn)
+
+if (write_results_to_xls){
+  #save the data for this figure to the results spreadsheet
+  write.xlsx(as.data.frame(Rohe_Emissions_and_GDP), xls_out_ffn, sheetName = "Rohe Emissions GDP",col.names = TRUE, row.names = TRUE, append = T)
+}
+
+#write the data to a csv files as well
+write_csv(Rohe_Emissions_and_GDP, file = Rohe_Emissions_and_GDP_ffn)
+
+Rohe_Emissions_and_GDP %>% 
+  group_by(ROHE) %>% 
+  summarise(TOM_EMS = sum(Ems_TOM ),
+            AOT_EMS = sum(Ems_AOT),
+            MAORI_SHARE = TOM_EMS/AOT_EMS*100)
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 5 - ROHE MAP  >-----
+#------------------------
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 5 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+Create the Rohe Map
+
+Data Set(s) Used: Rohe_tidy
+Formatting and Ordering Data Sets: rohe_palette
+
+```{r}
+
+
+fignum = 5
+figdesc = "-ROHE-MAP"
+figfmt = ".svg"
+
+g1 = ggplot(Rohe_tidy) + geom_sf(aes(fill=ROHE_with_acc)) + scale_fill_manual(breaks = rohe_name,values = rohe_palette)
+
+
+
+
+g1 = g1 + theme_minimal()
+# g1 = g1 + scale_fill_discrete(name = "New Legend Title")
+g1 = g1 + scale_fill_manual(name = "Rohe",breaks = rohe_name,values = rohe_palette)
+g1 = g1 + theme(panel.grid = element_blank())
+g1 = g1 + theme(axis.text = element_blank())
+
+
+g1
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+# ggsave(fig_ffn,g)
+
+ggsave(fig_ffn,g1, height = 6, width = 10)
+
+
+
+
+```
+
+
+
+#------------------------
+#-->----<  FIGURE 6  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 6 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+Rohe_Emissions_TOM_and_AOT = Rohe_Emissions_and_GDP %>% 
+  ungroup() %>% 
+  select(Sector = anzsic_descriptor, Rohe = ROHE_with_acc, `New Zealand`=Ems_AOT,"M\u101ori"=Ems_TOM)  %>% 
+  gather(key = "Group", value = "Emissions",-Sector,-Rohe) %>% 
+  mutate(
+    Group = str_replace_all(Group, "Maori", "M\u101ori"),
+    Sector= str_replace_all(Sector, "Services excluding transport, postal, and warehousing", "Other services"))
+
+
+#get sum emisisions for each rohe
+
+Rohe_Emissions_TOM_sum = Rohe_Emissions_and_GDP %>% 
+  summarise(Ems_TOM = sum(Ems_TOM))
+
+
+#get Waitaha emissions alone
+
+Waitaha_Emissions = Rohe_Emissions_TOM_and_AOT %>% filter(Rohe == "Waitaha")
+
+Waitaha_Emissions_Sum = Waitaha_Emissions %>% 
+  group_by(Group) %>% 
+  summarise(Emissions=sum(Emissions))
+
+Waitaha_Emissions_Sum_TOM = Waitaha_Emissions_Sum %>% filter(Group=="M\u101ori") %>% pull(Emissions)
+Waitaha_Emissions_Sum_AOT = Waitaha_Emissions_Sum %>% filter(Group=="New Zealand") %>% pull(Emissions)
+
+NZ_Emissions_AOT = D %>%  pull(TCO2e_emissions_AOT) %>% sum()
+NZ_Emissions_TOM = D %>%  pull(TCO2e_emissions_TOM) %>% sum()
+
+Waitaha_TOM_Emissions_Share_of_TOM_Total =  Waitaha_Emissions_Sum_TOM/NZ_Emissions_TOM*100
+Waitaha_TOM_Emissions_Share_of_NZ_Total  =  Waitaha_Emissions_Sum_TOM/NZ_Emissions_AOT*100
+
+Waitaha_AOT_Emissions_Share_of_TOM_Total =  Waitaha_Emissions_Sum_AOT/NZ_Emissions_TOM*100
+Waitaha_AOT_Emissions_Share_of_NZ_Total  =  Waitaha_Emissions_Sum_AOT/NZ_Emissions_AOT*100
+
+
+# $ROHE_with_acc = factor(Rohe_Emissions_and_GDP$ROHE_with_acc, levels = rev(ROHE_levels))
+
+
+
+# Order_7sec = (Rohe_Emissions_TOM_and_AOT %>% distinct(Sector) %>% pull())[c(1,4,5,2,3,7,6)]
+# 
+# saveRDS(Order_7sec, paste0(datadir, "Order_7sec.RDS"))
+
+Rohe_Emissions_TOM_and_AOT$Sector = factor(Rohe_Emissions_TOM_and_AOT$Sector, levels = Order_7sec)
+
+
+ROHE_levels = rev(unique(Rohe_Emissions_TOM_and_AOT$Rohe)[c(6,3,9,4,1,2,5,8,7,10)])
+
+Rohe_Emissions_TOM_and_AOT$Rohe = factor(Rohe_Emissions_TOM_and_AOT$Rohe, levels = ROHE_levels)
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 6 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+Figure 6. CO2-e Emissions stacked by rohe, facet by Group
+
+Data Set(s) Used: 
+Formatting and Ordering Data Sets: rohe_palette
+
+```{r}
+
+fignum = 6
+figdesc = "-emissions_by_rohe-facet-by-group"
+figfmt = ".png"
+
+# using dataframe: Rohe_Emissions_TOM_and_AOT, created is Step 3 of Regional Analysis
+
+
+
+g = ggplot(Rohe_Emissions_TOM_and_AOT, aes(x = Rohe, y = Emissions, fill =  Sector)) + geom_bar(position=  "stack", stat = "identity" ) + coord_flip() + facet_grid(.~Group, scales = "free_x")
+
+g = g + labs(x = "Rohe",y= expression(paste("Gross Emissions (kt ",CO[2],"-e)") ))
+g = g + scale_fill_manual(name = "Sector", values = rev(pal_7sec))
+
+g = g + theme_minimal() 
+g = g + theme(
+  panel.grid = element_blank(),
+  legend.position = "bottom")
+g = berl_style(g)
+g = g + theme(legend.position = "bottom",
+              legend.direction = "horizontal")
+
+# g = g + theme(legend.margin = margin(0, 50, 0, 50) )
+
+g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+# ggsave(fig_ffn,g)
+
+ggsave(fig_ffn,g, height = 6, width = 10)
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 6 Write to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  # figdata_TOM = 
+  
+  
+  rohe_levels_with_accents_no_kura = rohe_levels_with_accents[c(1:6,8:11)]
+  
+  
+  figdata_TOM = Rohe_Emissions_TOM_and_AOT %>%  
+    filter(Group == "M\u101ori") %>% 
+    select(-Group) %>% 
+    mutate(Rohe = fct_relevel(Rohe,rohe_levels_with_accents_no_kura)) %>% 
+    spread(key = Rohe, value = Emissions) %>% 
+    mutate(Group = "M\u101ori Emissions")
+  
+  figdata_AOT = Rohe_Emissions_TOM_and_AOT %>%  
+    filter(Group == "New Zealand") %>% 
+    select(-Group) %>% 
+    mutate(Rohe = fct_relevel(Rohe,rohe_levels_with_accents_no_kura)) %>% 
+    spread(key = Rohe, value = Emissions) %>% 
+    mutate(Group = "All NZ EMissions")
+  
+  figdata = figdata_TOM %>% bind_rows(figdata_AOT)
+  
+  
+  
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+#------------------------
+#-->----<  FIGURE 7  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 7 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+Rohe_Emissions_TOM_and_AOT_No_Ag =  Rohe_Emissions_TOM_and_AOT %>% 
+  filter(Sector != "Agriculture")
+
+Rohe_Emissions_TOM_and_AOT_No_Ag$Sector = factor(Rohe_Emissions_TOM_and_AOT_No_Ag$Sector, levels = Order_7sec[2:7])
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 7 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+Figure 7. CO2-e Emissions stacked by rohe, facet by Group - NO AG
+
+Data Set(s) Used: Rohe_Emissions_TOM_and_AOT_No_Ag
+Formatting and Ordering Data Sets: rohe_palette
+
+```{r}
+
+fignum = 7
+figdesc = "-emissions_by_rohe-facet-by-group-No-Ag"
+
+g = ggplot(Rohe_Emissions_TOM_and_AOT_No_Ag, aes(x = Rohe, y = Emissions, fill =  Sector)) + geom_bar(position=  "stack", stat = "identity" ) + coord_flip() + facet_grid(.~Group, scales = "free_x")
+
+g = g + labs(x = "Rohe",y= expression(paste("Gross Emissions (kt ",CO[2],"-e)") ))
+g = g + scale_fill_manual(name = "Sector", values = rev(pal_6sec))
+
+g = g + theme_minimal() 
+g = g + theme(
+  panel.grid = element_blank(),
+  legend.position = "bottom")
+g = berl_style(g)
+g = g + theme(legend.position = "bottom",
+              legend.direction = "horizontal")
+
+# g = g + theme(legend.margin = margin(0, 50, 0, 50) )
+
+g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, height = 6, width = 9)
+
+```
+
+#------------------------
+#-->----<  FIGURE 8  ROHE EMISSIONS by GHG >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 8 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+
+D_reg_18_allgases_filt = D_reg_18 %>% filter(anzsic_descriptor == "Total")
+
+# 
+# D_reg_18 %>% filter(anzsic_descriptor=="Agriculture")
+# 
+# D_reg_18 %>% filter(anzsic_descriptor=="Total")
+# D_reg_18 %>% distinct(region)
+# 
+# 
+# unique(D_reg_18_allgases_filt$anzsic_descriptor)
+# unique(D_reg_18_allgases_filt$region)
+# unique(D_reg_18_allgases_filt$gas)
+# 
+
+
+# Step 1. Create a data table of each Rohe Then right join the Emissions Data
+Emissions_allgases_by_Rohe = Region_Rohe_key %>% 
+  right_join(D_reg_18_allgases_filt, by = c("Region"= "region"))%>% 
+  group_by(ROHE, gas) %>% 
+  summarise( 
+    ROHE_abbrev = first(ROHE_abbrev),
+    emissions = sum(data_val) ) %>% 
+  select(ROHE_abbrev, everything()) %>% 
+  filter(gas != "Carbon dioxide equivalents")
+
+Emissions_allgases_by_Rohe
+
+#Step 2 grab the GDP Data
+
+GDP_by_Rohe = GDP_by_Rohe_and_Sector %>% 
+  group_by(ROHE) %>% 
+  summarise(
+    ROHE_abbrev = first(ROHE_abbrev),
+    GDP_AOT = sum(GDP_AOT),
+    GDP_TOM = sum(GDP_TOM)
+  ) %>% select(-ROHE)
+
+#Step 3 - join the economic and the emissions data
+
+Rohe_Emission_and_GDP_data_by_gas = GDP_by_Rohe %>% 
+  right_join(Emissions_allgases_by_Rohe, by  = "ROHE_abbrev") 
+
+Rohe_Emission_and_GDP_data_by_gas$gas
+
+Rohe_Emission_and_GDP_data_by_gas$gas = factor(Rohe_Emission_and_GDP_data_by_gas$gas,
+                                               levels = c("Carbon dioxide","Methane","Nitrous oxide","Fluorinated gases"))
+
+
+# From the non regional I&H data set get the breakdown of GHG by eacSector_Order
+
+# Gas_Breakdown_by_Sector = D %>% 
+rewrite_berl_to_i_and_h_key = F
+
+if (rewrite_berl_to_i_and_h_key){
+  write.csv(D, file = paste0(datadir,'BerlSector_to_I_and_H_Regional_key.csv'))
+}
+
+berl_to_i_and_h_key = read_csv(paste0(datadir,'BerlSector_to_I_and_H_Regional_key.csv')) %>% 
+  select(Sector, SECTOR_abbrev)
+
+
+Sector_Abbrev_key = Rohe_Emissions_and_GDP %>% 
+  ungroup() %>% 
+  select(anzsic_descriptor, SECTOR_abbrev) %>% 
+  distinct()
+
+
+# D %>% left_join(berl_to_i_and_h_key, by = "Sector") %>% 
+#   group_by(SECTOR_abbrev) %>% 
+#   summarise(across(contains("emissions")), ~ sum(.x, na.rm = TRUE))
+
+Sector_Profile = D %>% 
+  left_join(berl_to_i_and_h_key, by = "Sector") %>% 
+  group_by(SECTOR_abbrev) %>% 
+  summarise(
+    TCO2e_emisisons_AOT = sum(TCO2e_emissions_AOT),
+    CO2_emisisons_AOT = sum(CO2_emissions_AOT),
+    CH4_emisisons_AOT = sum(CH4_emissions_AOT),
+    N2O_emisisons_AOT = sum(N2O_emissions_AOT),
+    Fgas_emisisons_AOT = sum(Fgas_emissions_AOT)) %>% 
+  mutate(
+    Frac_CO2 = CO2_emisisons_AOT/TCO2e_emisisons_AOT,
+    Frac_CH4 = CH4_emisisons_AOT/TCO2e_emisisons_AOT,
+    Frac_N2O = N2O_emisisons_AOT/TCO2e_emisisons_AOT,
+    Frac_Fgas = Fgas_emisisons_AOT/TCO2e_emisisons_AOT,
+    CHK_TOTAL = Frac_CO2 + Frac_CH4 + Frac_N2O+ Frac_Fgas) %>% 
+  left_join(Sector_Abbrev_key, by = "SECTOR_abbrev") %>% 
+  select(anzsic_descriptor,everything())
+
+
+
+Sector_Profile_slim = Sector_Profile %>% select(SECTOR_abbrev, contains('Frac'))
+
+Sector_Profile$CHK_TOTAL
+
+gas_list = unique(Rohe_Emission_and_GDP_data_by_gas$gas)
+rohe_list = unique(Rohe_Emission_and_GDP_data_by_gas$ROHE)
+
+Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector = Rohe_Emissions_and_GDP %>% 
+  left_join(Sector_Profile_slim, by = "SECTOR_abbrev") %>% 
+  mutate(
+    Ems_CO2_AOT = Ems_AOT * Frac_CO2,
+    Ems_CH4_AOT = Ems_AOT * Frac_CH4,
+    Ems_N2O_AOT = Ems_AOT * Frac_N2O,
+    Ems_Fgas_AOT = Ems_AOT * Frac_Fgas,
+    Ems_CO2_TOM = Ems_TOM * Frac_CO2,
+    Ems_CH4_TOM = Ems_TOM * Frac_CH4,
+    Ems_N2O_TOM = Ems_TOM * Frac_N2O,
+    Ems_Fgas_TOM = Ems_TOM * Frac_Fgas) 
+
+
+Rohe_Emissions_and_GDP_by_GHG_Rohe_AOT  = Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector %>% 
+  ungroup() %>% 
+  select(ROHE_abbrev, ROHE, anzsic_descriptor, Ems_AOT, 
+         CO2 = Ems_CO2_AOT,
+         CH4 = Ems_CH4_AOT,
+         N2O = Ems_N2O_AOT,
+         Fgas = Ems_Fgas_AOT) %>% 
+  gather(key = "gas", value = "Emissions_CO2e", CO2,CH4,N2O,Fgas) %>% 
+  group_by(ROHE, gas) %>% 
+  summarise(Emissions_CO2e = sum(Emissions_CO2e))
+
+Rohe_Emissions_and_GDP_by_GHG_Rohe_TOM  = Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector %>% 
+  ungroup() %>% 
+  select(ROHE_abbrev, ROHE, anzsic_descriptor, Ems_TOM, 
+         CO2 = Ems_CO2_TOM,
+         CH4 = Ems_CH4_TOM,
+         N2O = Ems_N2O_TOM,
+         Fgas = Ems_Fgas_TOM) %>% 
+  gather(key = "gas", value = "Emissions_CO2e", CO2,CH4,N2O,Fgas) %>% 
+  group_by(ROHE, gas) %>% 
+  summarise(Emissions_CO2e = sum(Emissions_CO2e))
+
+Rohe_Emissions_and_GDP_by_GHG_Rohe_AOT$gas = factor(Rohe_Emissions_and_GDP_by_GHG_Rohe_AOT$gas, levels = c("CO2","CH4","N2O","Fgas"))
+
+Rohe_Emissions_and_GDP_by_GHG_Rohe_TOM$gas = factor(Rohe_Emissions_and_GDP_by_GHG_Rohe_TOM$gas, levels = c("CO2","CH4","N2O","Fgas"))
+
+
+
+Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector_sel = Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector %>% 
+  ungroup() %>% 
+  select(Rohe = ROHE_with_acc,Sector = anzsic_descriptor, contains("Ems_CO2"),contains("Ems_CH4"),contains("Ems_N2O"),contains("Ems_Fgas")) %>% 
+  gather(key,value = Emissions,-Rohe,-Sector) %>% 
+  mutate(
+    Gas = case_when(
+      grepl('CO2',key) ~ "CO2",
+      grepl('CH4',key) ~ "CH4",
+      grepl('N2O',key) ~ "N2O",
+      grepl('Fgas',key) ~ "Fgas"),
+    Group = case_when(
+      grepl('AOT',key) ~ "New Zealand",  
+      grepl('TOM',key) ~ "M\u101ori",
+    )
+  )
+
+
+Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector_sel$Gas=factor(Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector_sel$Gas, levels = gas_order)
+
+
+gaslabels = c(
+  expression(CO[2]),expression(CH[4]),expression(paste(N[2],O)),expression("Fluorine gases")
+)
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 8 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+Figure 8. Bar Chart of Emissions by Rohe stacked by gas, facet by group
+
+Data Set(s) Used: Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector_sel
+Formatting and Ordering Data Sets: 
+
+
+```{r}
+
+fignum = 8
+figdesc = "-emissions_by_rohe_by_ghg_TOM"
+
+
+
+g = ggplot(Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector_sel, aes(x = Rohe, y = Emissions, fill =  Gas)) + geom_bar(position=  "stack", stat = "identity" ) + coord_flip() + facet_grid(.~Group, scales = "free_x")
+
+g = g + labs(x = "Rohe",y= expression(paste("Gross Emissions (kt ",CO[2],"-e)")))
+
+g = g + scale_fill_manual(name = "Gas", values = pal_gas,labels = gaslabels)
+
+g = g + theme_minimal() 
+g = g + theme(
+  panel.grid = element_blank(),
+  legend.position = "right")
+g = berl_style(g)
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, height = 6, width = 9)
+g
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 8 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  # figdata_TOM = 
+  
+  
+  rohe_levels_with_accents_no_kura = rohe_levels_with_accents[c(1:6,8:11)]
+  
+  
+  figdata_TOM = Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector_sel %>%  
+    filter(Group == "M\u101ori") %>% 
+    select(-Group) %>% 
+    mutate(Rohe = fct_relevel(Rohe,rohe_levels_with_accents_no_kura)) %>% 
+    spread(key = Rohe, value = Emissions) %>% 
+    mutate(Group = "M\u101ori Emissions")
+  
+  figdata_AOT = Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector_sel %>%  
+    filter(Group == "New Zealand") %>% 
+    select(-Group) %>% 
+    mutate(Rohe = fct_relevel(Rohe,rohe_levels_with_accents_no_kura)) %>% 
+    spread(key = Rohe, value = Emissions) %>% 
+    mutate(Group = "All NZ EMissions")
+  
+  figdata = figdata_TOM %>% bind_rows(figdata_AOT) %>% select(-key) %>%  select(Group, everything())
+  
+  
+  
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+
+#------------------------
+#-->----<  FIGURE 9 : EM INT by ROHE >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 9 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Employment and Stats
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+D_empl = read_excel(GDP_Employment_ffn, sheet = "Age by Ind", range = "B2:N32")
+
+names(D_empl) = c('Sector',
+                  "Maori 13-24 years",
+                  "Maori 24-34 years",
+                  "Maori 35-44 years",
+                  "Maori 45-54 years",
+                  "Maori 55-64 years",
+                  "Maori 64 years and over",
+                  "Non-Maori 13-24 years",
+                  "Non-Maori 24-34 years",
+                  "Non-Maori 35-44 years",
+                  "Non-Maori 45-54 years",
+                  "Non-Maori 55-64 years",
+                  "Non-Maori 64 years and over")
+
+D_empl_lng = D_empl %>% 
+  gather(key,value,-Sector) %>%
+  mutate(Ethnicity = ifelse(grepl("Non-Maori",key), "Non-M\u101ori", "M\u101ori"),
+         Age = ifelse(Ethnicity == "Non-M\u101ori", gsub("Non-Maori ","", key),gsub("Maori ","",key) ),
+         Age = gsub("years","",Age)) %>% 
+  filter(Sector != 'Total')
+
+
+# 
+Reconc_Sector_Abbrev_key = D %>% select(Sector, berl_sector_abbrev   , My_Sector_L1_Code , Levels)
+# 
+# D$Sector[18]
+# Berl_Sector_Key$`Reconciled Sector Name`
+
+D_empl_lng_rec =
+  D_empl_lng %>% 
+  left_join(Berl_Sector_Key, by = c("Sector" = "Industry")) %>% 
+  group_by(Sector, Ethnicity, Age) %>% 
+  dplyr::summarise(n_employed = sum(value)) %>% 
+  left_join(Reconc_Sector_Abbrev_key, by = "Sector") %>% 
+  mutate(
+    # Sector_Abbrev = substring(Sector,1,8),
+    Sector_Abbrev = berl_sector_abbrev  ,
+    Sector_Abbrev = fct_reorder(Sector_Abbrev, Levels )
+  ) 
+
+# 
+# D_empl_lng %>% distinct(Age)
+# D
+# 
+# Reconc_Sector_Order = D_empl_lng_rec %>% distinct(Sector) %>% pull(Sector)
+
+# D_empl_lng$Sector = factor(D_empl_lng$Sector, levels = Sector_Order)
+
+# gsub("Non-Maori ","", "Non-Maori AGES")
+
+RC_Sector_Abbrev_Order = D_empl_lng_rec %>% 
+  ungroup() %>% 
+  select(Sector_Abbrev, Levels) %>% 
+  distinct() %>% 
+  arrange(Levels) %>% 
+  pull(Sector_Abbrev )
+
+D_empl_lng_rec$Sector_Abbrev  = factor(D_empl_lng_rec$Sector_Abbrev , levels = RC_Sector_Abbrev_Order)
+
+# RC_Sector_Order = D_empl_lng_rec %>% 
+#   ungroup() %>% 
+#   select(Sector, Levels) %>% 
+#   distinct() %>% 
+#   arrange(Levels) %>% 
+#   pull(Sector )
+# 
+# RC_Sector_Order_dn = datadir
+# RC_Sector_Order_fn = "RC_Sector_Order.RDS"
+# RC_Sector_Order_ffn = paste0(RC_Sector_Order_dn,RC_Sector_Order_fn)
+# 
+# saveRDS(RC_Sector_Order, RC_Sector_Order_ffn)
+# 
+
+
+
+
+# D_empl_lng2 = D_empl_lng %>% spread(key = Eth, value = value)
+# Cross CHeck with totals from other table
+
+
+GDP_Employment_totals_ffn = paste0(datadir, "gdp/GDP and Employment.xlsx")
+
+D_empl_tot = read_excel(GDP_Employment_totals_ffn, sheet = "Sheet1", range = "A1:C31")
+
+D_empl_tot_tot = D_empl_tot %>% summarise(NZ =  sum(`NZ GDP Totals`), M_empl = sum(`Maori employment counts`))
+
+# D_empl_lng %>% group_by(Eth) %>% summarise(total = sum(value))
+
+#These numbers don't seem to agree!
+
+# Use the tabkle with the age breakdown
+
+
+D_nat_empl = read_excel(GDP_Employment_ffn,sheet = "National employment", range = "A1:C30") 
+
+
+D_empl_stat = read_excel(GDP_Employment_ffn,sheet = "Employment status", range = "B3:H31", col_names = F) 
+
+names(D_empl_stat) <- c("Sector","Employers M\u101ori","Self-employed M\u101ori", "Employees M\u101ori","Employers Non-M\u101ori","Self-employed Non-M\u101ori", "Employees Non-M\u101ori")
+
+D_All_Facets = D_nat_empl %>% 
+  left_join(D_empl_stat, by = c("Industry" = "Sector")) %>% 
+  left_join(Berl_Sector_Key, by = "Industry") %>% 
+  group_by(`Reconciled Sector Name`) %>% 
+  dplyr::summarise(across(contains("mploy"), ~ sum(.x, na.rm = TRUE))) %>% 
+  select(Sector = `Reconciled Sector Name`, everything()) %>% 
+  left_join(D, by = c("Sector" = "Sector")) %>% 
+  mutate(Sector = str_replace_all(Sector, "Food M","Food m"))
+
+
+D_All_Facets$Sector = factor(D_All_Facets$Sector, levels = rev(RC_Sector_Order))
+
+Emitting_Level_df = D %>% select(Sector,`EML-3T`)
+Emitting_Level_df %>% filter(Sector=="Construction")
+
+D_Employers = D_All_Facets %>% select(Sector , contains("Employers"))
+D_Employees = D_All_Facets %>% select(Sector , contains("Employees"))
+D_SelfEmployed = D_All_Facets %>% select(Sector , contains("Self"))
+
+
+
+```
+
+
+
+```{r}
+
+AssetBase_by_rohe_ffn = paste0(datadir,"berl data/Asset base by Rohe for Andrew.xlsx")
+
+D_Primary_Assets = read_excel(AssetBase_by_rohe_ffn, range = "B3:T37")  %>% select(Sector,`Te Tai Tokerau`:`Not elsewhere included`)
+
+D_Primary_Assets_lng =D_Primary_Assets %>% 
+  gather(key,value, -Sector)
+
+full_sector_list = D_Primary_Assets_lng %>% distinct(Sector) %>% pull(Sector)
+primary_sector_list = full_sector_list[1:8]
+
+D_Primary_Assets_lng = D_Primary_Assets_lng %>% filter(Sector %in% primary_sector_list)
+
+ROHE_levels_1003 = c(ROHE_levels, "Not elsewhere included")
+
+D_Primary_Assets_lng %>% distinct(key)
+D_Primary_Assets_lng$key = factor(D_Primary_Assets_lng$key, levels = rev(ROHE_levels_1003))
+
+
+
+
+Sector_levels_1003 = (D_Primary_Assets_lng %>% distinct(Sector) %>% pull(Sector))[c(3,4,8,1,2,5,6,7)]
+
+
+D_Primary_Assets_lng$Sector = factor(D_Primary_Assets_lng$Sector, levels = Sector_levels_1003)
+
+pal_1003 = berl_pal[c(1,6,4,2,11,9,5,8)]
+
+
+HIGH_THRESHOLD = 1.5
+# MOD_THRESHOLD = 0.5
+
+# Change the moderate threshold, this will put more industries into the Moderate basket
+MOD_THRESHOLD = 0.05
+
+
+
+
+
+D_EmInt = D_All_Facets %>%   
+  select(Sector,  GDP_TOM, Emissions = TCO2e_emissions_AOT, TCO2e_emissions_TOM, GDP_AOT, TCO2e_intensity_AOT, Assets, `Number Maori Employed`, `Employees Maori`, `Employers Māori`,`Self-employed Maori`) %>% 
+  mutate(
+    `GDP` = TCO2e_intensity_AOT,
+    `Assets` = TCO2e_emissions_TOM/Assets,
+    `Employees` = TCO2e_emissions_TOM/`Employees Māori`,
+    `Employers` = TCO2e_emissions_TOM/`Employers Māori`,
+    `Self-Employed` = TCO2e_emissions_TOM/`Self-employed Maori`) %>% 
+  select(
+    Sector,`GDP`,`Assets`,`Assets`,`Employers`,`Self-Employed`,Emissions ) %>% 
+  mutate(
+    EmIntRank = case_when(
+      GDP >= HIGH_THRESHOLD ~ 'High',
+      GDP >= MOD_THRESHOLD ~ 'Moderate',
+      GDP < MOD_THRESHOLD ~ 'Low')) %>% 
+  arrange(desc(GDP))
+
+D_EmInt$Sector
+write_csv(D_EmInt, file = paste0(analdir, "EmissionsIntensityRanking.csv"))
+
+
+High_Emitters = D_EmInt %>% filter(EmIntRank=="High") %>% pull(Sector)
+Moderate_Emitters = D_EmInt %>% filter(EmIntRank=="Moderate") %>% pull(Sector)
+Low_Emitters = D_EmInt %>% filter(EmIntRank=="Low") %>% pull(Sector)
+
+print("High Emitters")
+print(as.character(High_Emitters))
+print(as.character(Moderate_Emitters))
+print(as.character(Low_Emitters))
+
+
+# view(D_EmInt %>% select(Sector, GDP, EmIntRank))
+
+
+Emissions_Intensity_Key = D_EmInt %>% select(Sector, EmIntRank)
+
+
+Emissions_Intensity_order = D_EmInt %>% select(Sector, GDP, EmIntRank) %>% arrange(desc(GDP)) %>% pull(Sector)
+
+
+# save the Emissions INtensity Key
+saveRDS(Emissions_Intensity_Key, paste0(datadir, "Emissions_Intensity_Key.rds"))
+
+
+D_EmInt_excl_past = D_EmInt %>%  filter(Sector != "Sheep and beef farming" & Sector != "Dairy")
+
+
+D_EmInt_lng = D_EmInt %>% 
+  gather(key,value,-Sector, -EmIntRank)
+
+D_EmInt_lng$EmIntRank = factor(D_EmInt_lng$EmIntRank, levels = c("High","Moderate", "Low"))
+
+D_EmInt_lng$key = factor(D_EmInt_lng$key, levels = c("GDP","Assets", "Employees", "Employers", "Self-Employed","Emissions"))
+
+Sector_Ranking = D_EmInt %>% select(Sector,EmIntRank)
+
+#Calculate emissions intensity by Rohe
+
+Emissions_Intensity_by_Rohe = Rohe_Emissions_and_GDP_by_GHG_Rohe_Sector %>% 
+  ungroup() %>% 
+  # select(-ROHE, -ROHE_with_acc) %>% 
+  # left_join(ROHE_abbrev_key, by="ROHE_abbrev") %>% 
+  group_by(ROHE_with_acc  ) %>% 
+  summarise(
+    GDP_AOT = sum(GDP_AOT),
+    GDP_TOM = sum(GDP_TOM),
+    Ems_AOT = sum(Ems_AOT),
+    Ems_TOM = sum(Ems_TOM)
+  ) %>% 
+  mutate(
+    Ems_Int_AOT = Ems_AOT/GDP_AOT,
+    Ems_Int_TOM = Ems_TOM/GDP_TOM
+  ) %>% 
+  dplyr::rename(Rohe = ROHE_with_acc)
+
+
+Emissions_by_Rohe_lng = Emissions_Intensity_by_Rohe %>% 
+  select(Rohe, contains("Ems")) %>% 
+  dplyr::rename(`All NZ` = Ems_AOT  , Maori = Ems_TOM) %>%
+  gather(key=Group, value = Emissions, `All NZ`, Maori) %>% 
+  mutate(Group = str_replace_all(Group,"Maori","M\u101ori")) 
+
+GDP_by_Rohe_lng = Emissions_Intensity_by_Rohe %>% 
+  select(Rohe, GDP_AOT , GDP_TOM ) %>% 
+  dplyr::rename(`All NZ` = GDP_AOT  , Maori = GDP_TOM) %>%
+  gather(key=Group, value = GDP, `All NZ`, Maori) %>% 
+  mutate(Group = str_replace_all(Group,"Maori","M\u101ori")) 
+
+group_order_f8=unique(GDP_by_Rohe_lng$Group)[c(2,1)]
+
+Emissions_by_Rohe_lng$Group = factor(Emissions_by_Rohe_lng$Group , levels = group_order_f8)
+GDP_by_Rohe_lng$Group = factor(GDP_by_Rohe_lng$Group , levels = group_order_f8)
+
+
+Emissions_Intensity_by_Rohe_lng = Emissions_Intensity_by_Rohe %>% 
+  dplyr::rename(`All NZ` = Ems_Int_AOT , Maori = Ems_Int_TOM) %>% 
+  gather(key=Group, value = Intensity, `All NZ`, Maori) %>% 
+  mutate(Group = str_replace_all(Group,"Maori","M\u101ori")) 
+
+
+```
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 9 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+fignum = 9
+figdesc = "-emissions_intensity_by_rohe"
+figfmt = ".png"
+
+# Emissions_Intensity_by_Rohe_lng$Rohe = factor(Emissions_Intensity_by_Rohe_lng$Rohe, levels = ROHE_Order)
+
+g = ggplot(Emissions_Intensity_by_Rohe_lng, aes(Rohe,Intensity))+geom_bar(aes(fill = Group), stat = "identity", position = "dodge")+ coord_flip() 
+
+g = g + labs(y = expression(paste("kT ",CO[2],"-e per million dollars GDP")))
+g = g + scale_fill_manual(values = berl_pal[c(2,1)])
+
+g = g + theme_minimal()
+g = g + theme(text = element_text(family = "arial"))
+g = g + theme(text = element_text(face = "plain"))
+g = g + theme(text = element_text(size = 10))
+
+g
+
+
+Emissions_Intensity_by_Rohe_lng %>% distinct(Group)
+
+g = g + geom_hline(yintercept=0.47, linetype="dashed", color = berl_pal[1],size=1)
+g = g + geom_hline(yintercept=0.27, linetype="dashed", color = berl_pal[2],size=1)
+
+g
+# 
+# 
+# g = g + theme(
+#   legend.position = c(.78,.3),
+#   panel.grid.minor = element_blank(),
+#   panel.grid.major =  element_blank(),
+#   # panel.grid.major.x =  element_line(color = 'grey')
+# )
+# g = berl_style(g)
+g = g+theme_minimal() + theme(text = element_text(size = 10,face = "plain"))
+g
+
+g = berl_style(g)
+
+
+
+# Add the emissions and the conomy data to this figure
+
+
+g1 = g
+g1 = g1 + labs(y = expression(paste( "kt C", O[2], "-e per $M GDP")))
+
+
+
+GDP_by_Rohe_lng_Maori = GDP_by_Rohe_lng %>% filter(Group== "M\u101ori")
+
+g4 = ggplot(GDP_by_Rohe_lng_Maori, aes(Rohe, GDP)) + geom_bar(stat = "identity", fill = berl_pal[1])
+g4 = g4 + coord_flip()
+g4 = g4 + labs(y = "M\u101ori GDP ($M)")
+g4 = berl_style(g4)
+g4
+
+
+g1 = g1 + theme(axis.text.y = element_blank(), axis.title.y = element_blank())
+
+p = plot_grid(g4,g1)
+
+p
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,p, width = 22, units = "cm")
+
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 9 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata = Emissions_Intensity_by_Rohe_lng
+  
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+
+#------------------------
+#-->----<  FIGURE 11 : Proportions of different land cover classes  >-----
+#------------------------
+
+Note (20/8/21) The analysis of this data was done for DP-0012 (development project folder for Maori Land Emissions).
+The script was ML_GHG.Rmd
+
+Then a script was created to form the final plots used in the Berl Maori Economy Emissions Profile that was called:
+LP0005-GHG-MEcon-MainAnalysis_clean (backup).Rmd
+
+Now the data created with those scripts has been copied to the LP-0005 Folder .
+I have copied the code that extracts and collates the data into this script (so that we can generate all the figures required for the report in one script). 
+
+We make a variable called gisdir which contains this folder:
+"D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/GIS/"
+ 
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 11 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+
+TA = st_read(TA_ffn)
+
+
+TA_names = TA %>% filter( (TA2019_V_1 != "Chatham Islands Territory") & (TA2019_V_1 != "Area Outside Territorial Authority")) %>% pull(TA2019_V_1)
+
+
+output_folder = paste0(gisdir,"layers/")
+
+
+for (i in 1:length(TA_names)){
+  
+  TA_curr_name = TA_names[i]
+  
+  
+  
+  dirout = paste0(output_folder,"TA layers/",TA_curr_name,"/")
+  
+  
+  LUMxTA_2016_smy_ffn = paste0(dirout,"LUMxTA_2016_smy.csv")
+  
+  # 
+  if (file.exists(LUMxTA_2016_smy_ffn)){
+    D = read_csv(LUMxTA_2016_smy_ffn)
+    
+    print(i)
+    if (i==1){
+      DD = D
+    }else{
+      DD = DD %>% bind_rows(D)
+    }
+    
+    print(paste("Found data for ", TA_curr_name))
+    print(paste("....added", dim(D[1]), "rows to DD"))
+    print(paste("....DD is now", dim(DD[1]), "rowslong"))
+    
+  }else{
+    print(paste(" Missing data set for", TA_curr_name))
+  }
+  
+}
+
+dim(DD)
+
+DD_fout = "LUM_Areas_by_TA__Collated.csv"
+DD_ffout = paste0(datadir,DD_fout)
+write_csv(DD,file = DD_ffout)
+
+```
+
+#MUNGE
+
+```{r}
+
+
+
+
+rohe_key_land = readRDS("D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/TLA_ROHE_RA_key.rds") %>% 
+  select(TLA,ROHE_with_acc) %>% distinct()
+
+
+
+DD_fout = "LUM_Areas_by_TA__Collated.csv"
+DD_ffout = paste0(datadir,DD_fout)
+
+LUCID_2016_key = read_csv(DD_ffout) %>% 
+  select(LUCID_2016, LUCNA_2016) %>% 
+  distinct()
+
+
+
+
+LUM_Rohe = read_csv(DD_ffout) %>% 
+  left_join(rohe_key_land,by = c("TLA" = "TLA")) %>% 
+  ungroup() %>% 
+  group_by(ROHE_with_acc, LUCID_2016,ML) %>% 
+  summarise(Area = sum(Area)) %>% 
+  ungroup() %>% 
+  group_by(ROHE_with_acc,ML) %>% 
+  mutate(percentage_cover = 100*Area/sum(Area)) %>% 
+  left_join(LUCID_2016_key, by = "LUCID_2016") %>% 
+  mutate(Eth = ifelse(ML == "ML","M\u101ori Freehold Land","Non-M\u101ori Privately-Owned"))
+
+
+LUM_Rohe_Maori_Wide_Areas = LUM_Rohe %>% 
+  filter(ML == "ML") %>% 
+  ungroup() %>% 
+  select(ROHE_with_acc,LUCNA_2016,Area) %>% 
+  spread(key = ROHE_with_acc,value = Area)
+
+write_csv(LUM_Rohe_Maori_Wide_Areas,paste0(LP0005_analdir,"LUM_Rohe_Maori_Wide_Areas.csv"))
+
+
+LUM_Rohe_Non_Maori_Wide_Areas = LUM_Rohe %>% 
+  filter(ML != "ML") %>% 
+  ungroup() %>% 
+  select(ROHE_with_acc,LUCNA_2016,Area) %>% 
+  spread(key = ROHE_with_acc,value = Area)
+
+write_csv(LUM_Rohe_Non_Maori_Wide_Areas,paste0(LP0005_analdir,"LUM_Rohe_Non_Maori_Wide_Areas.csv"))
+
+
+LUM_National = LUM_Rohe %>% 
+  ungroup() %>% 
+  group_by(ML, LUCNA_2016) %>% 
+  summarise(Area = sum(Area)) %>% 
+  mutate(Percent_Cover = 100*Area/sum(Area),
+         Eth = ifelse(ML == "ML","M\u101ori Freehold Land","Non-M\u101ori Privately-Owned"))
+# 
+
+lucna = unique(LUM_National$LUCNA_2016)
+lucna_lvls2 = as.character(lucna)
+
+
+LUM_National_wide = LUM_National %>% 
+  ungroup() %>% 
+  select(LUCNA_2016, Area, Eth) %>% 
+  spread(key = Eth, value = Area)
+
+LUM_National_wide_percent = LUM_National %>% 
+  ungroup() %>% 
+  select(LUCNA_2016, Percent_Cover, Eth) %>% 
+  spread(key = Eth, value = Percent_Cover)
+
+LUM_National_wide = LUM_National_wide %>% 
+  left_join(LUM_National_wide_percent, by = "LUCNA_2016") 
+
+LUM_National_wide$LUCNA_2016 = factor(LUM_National_wide$LUCNA_2016, levels = as.character(lucna_lvls2))
+
+write_csv(file = paste0(analdir,"LUM_National_wide.csv"),LUM_National_wide)
+
+LUM_National$LUCNA_2016 = factor(LUM_National$LUCNA_2016, levels = lucna_lvls2)
+
+
+names(LUM_Rohe)
+names(LUM_National)
+
+LUM_National_to_join = LUM_National %>% 
+  mutate(ROHE_with_acc = "All NZ") %>% 
+  select(Rohe = ROHE_with_acc, Eth, LUCNA_2016, `Percent Cover` = Percent_Cover)
+
+LUM_Rohe_to_join = LUM_Rohe %>% 
+  select(Rohe = ROHE_with_acc, Eth, LUCNA_2016, `Percent Cover` = percentage_cover)
+
+
+LUM_National_Rohe = LUM_National_to_join %>% 
+  bind_rows(LUM_Rohe_to_join)
+
+
+names(LUM_Rohe_to_join)
+names(LUM_National_to_join)
+
+
+
+#define orders and pallets for land analysis
+
+LUCNA_levels = rev(unique(LUM_Rohe$LUCNA_2016))
+
+
+rohe_levels_land = unique(LUM_Rohe$ROHE_with_acc)[c(7,4,10,5,2,3,1,6,9,8,11)]
+rohe_levels_land_ext = rev(c("All NZ", as.character(rohe_levels)))
+
+
+
+
+LUM_National_Rohe$Rohe = factor(LUM_National_Rohe$Rohe, levels = rohe_levels_land_ext)
+
+LUM_National_Rohe$LUCNA_2016 = factor(LUM_National_Rohe$LUCNA_2016, levels = LUCNA_levels)
+
+LUM_Rohe$LUCNA_2016 = factor( LUM_Rohe$LUCNA_2016, levels = LUCNA_levels)
+LUM_Rohe$ROHE_with_acc = factor( LUM_Rohe$ROHE_with_acc, levels = rev(rohe_levels_land))
+
+LUCNA_pal = rev(berl_pal[c(5,1,6,2,9,12,4,7,10,8,11,3)])
+
+
+LUM_National_Rohe_simplified = LUM_National_Rohe %>% 
+  mutate(
+    cat_simp = case_when(
+      str_detect(LUCNA_2016,"Forest") ~ "FOREST",
+      str_detect(LUCNA_2016,"Grass") ~ "GRASS")    ,
+    Class_Simple = ifelse(is.na(cat_simp),"Other",as.character(LUCNA_2016)),
+    Eth = ifelse(str_detect(Eth,"Privately"), "General Title", Eth))
+
+
+Class_Simple_pal = rev(berl_pal[c(5,6,4,11,2,12,9)]  )
+
+Class_Simple_order = rev(unique(LUM_National_Rohe_simplified$Class_Simple)[c(5,6,7,2,3,4,1)])
+
+LUM_National_Rohe_simplified$Class_Simple = factor(LUM_National_Rohe_simplified$Class_Simple, levels = Class_Simple_order)
+
+
+LUM_National_Rohe_simplified$Eth = factor(LUM_National_Rohe_simplified$Eth, levels = unique(LUM_National_Rohe_simplified$Eth)[c(1,2)])
+
+
+```
+
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 11 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+fignum = 11
+figdesc = "-Land-Cover-Proportions-ML-GT"
+figfmt = ".png"
+
+
+g = ggplot(LUM_National_Rohe_simplified, aes(Rohe,`Percent Cover`, fill = Class_Simple)) + geom_bar(stat = "identity", position = "stack")+facet_grid(.~Eth)
+
+g = g + coord_flip()
+g = g + labs(x = "Rohe", y = "Percent Land Cover")
+g = g + scale_fill_manual(values = Class_Simple_pal, name = "Land Cover Class",guide = guide_legend(reverse = T))
+g = berl_style(g)
+
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 24, height = 14, units = "cm")
+
+
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 11 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+ write plot dataout to file
+
+LUM_National_Rohe_Maori_Wide = LUM_National_Rohe %>% 
+  filter(ML=="ML") %>% 
+  spread(key = Rohe, value = `Percent Cover`)
+
+LUM_National_Rohe_Non_Maori_Wide = LUM_National_Rohe %>% 
+  filter(ML!="ML") %>% 
+  spread(key = Rohe, value = `Percent Cover`)
+
+
+write_csv(LUM_National_Rohe_Maori_Wide, file = paste0(analdir,"LUM_National_Rohe_Maori_Wide.csv"))
+write_csv(LUM_National_Rohe_Non_Maori_Wide, file = paste0(analdir,"LUM_National_Rohe_Non_Maori_Wide.csv"))
+
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata_ML = LUM_National_Rohe_simplified %>% 
+    filter(Eth=="M\u101ori Freehold Land") %>% 
+    ungroup() %>% 
+    select(Rohe, LUCNA_2016, `Percent Cover`) %>% 
+    spread( Rohe, `Percent Cover`) %>% 
+    mutate(LandOwnershipClass = "ML")
+  
+  figdata_GT = LUM_National_Rohe_simplified %>% 
+    filter(Eth=="General Title") %>% 
+    ungroup() %>% 
+    select(Rohe, LUCNA_2016, `Percent Cover`) %>% 
+    spread( Rohe, `Percent Cover`) %>% 
+    mutate(LandOwnershipClass = "GT")
+
+  figdata =figdata_ML %>% bind_rows(figdata_GT)
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+
+#------------------------
+#-->----<  FIGURE 12 : Areas of forest and grassland on Māori freehold land)  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 12 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+Class_Simple_pal = rev(berl_pal[c(5,6,4,11,2,12,9)]  )
+
+Class_Simple_order = rev(unique(LUM_National_Rohe_simplified$Class_Simple)[c(5,6,7,2,3,4,1)])
+
+LUM_National_Rohe_simplified$Class_Simple = factor(LUM_National_Rohe_simplified$Class_Simple, levels = Class_Simple_order)
+
+
+LUM_National_Rohe_simplified$Eth = factor(LUM_National_Rohe_simplified$Eth, levels = unique(LUM_National_Rohe_simplified$Eth)[c(1,2)])
+
+
+
+LUM_Rohe_forest_and_gassland = LUM_Rohe %>% 
+  filter(str_detect(LUCNA_2016,"Forest")|str_detect(LUCNA_2016,"Grassland"),
+         Eth == "M\u101ori Freehold Land")
+
+
+
+LUM_Rohe_forest_and_gassland$LUCNA_2016 = factor(LUM_Rohe_forest_and_gassland$LUCNA_2016, levels = Class_Simple_order[2:7])
+
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 12 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+fignum = 12
+figdesc = "-Areas-of-forest-and-grassland-on-Maori-freehold-land"
+figfmt = ".png"
+
+
+
+
+g = ggplot(LUM_Rohe_forest_and_gassland, aes(ROHE_with_acc,Area/1e3, fill = LUCNA_2016)) + geom_bar(stat = "identity", position = "stack")
+
+g = g + coord_flip()
+g = g + labs(x = "Rohe", y = "Area (kha)")
+g = g + scale_fill_manual(values = Class_Simple_pal[2:7], name = "Land Cover Class",guide = guide_legend(reverse = T))
+g = berl_style(g)
+
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 22, units = "cm")
+
+
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 12 write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata_ML =LUM_Rohe_forest_and_gassland %>% 
+    filter(Eth=="M\u101ori Freehold Land")   %>% 
+    ungroup() %>% 
+    select(Rohe=ROHE_with_acc , LUCNA_2016, Area) %>% 
+    spread( Rohe, Area) %>% 
+    mutate(LandOwnershipClass = "ML")
+  
+  figdata_GT = LUM_Rohe_forest_and_gassland %>% 
+    filter(Eth=="General Title") %>% 
+    ungroup() %>% 
+    select(Rohe=ROHE_with_acc , LUCNA_2016, Area) %>% 
+    spread( Rohe, Area) %>% 
+    mutate(LandOwnershipClass = "GT")
+
+  figdata =figdata_ML %>% bind_rows(figdata_GT)
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 14 : EMS INT 6 PANEL)  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 14 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+D_All_Facets$Sector
+
+data_for_plot_14 = D_All_Facets %>% 
+  left_join(D_EmInt, by = "Sector") %>% 
+  select(Sector, TCO2e_intensity_AOT, TCO2e_emissions_TOM , EmIntRank ) %>% 
+  arrange(desc(TCO2e_intensity_AOT))
+
+data_for_plot_14$Sector = factor(data_for_plot_14$Sector, rev(Emissions_Intensity_order))
+
+
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 14 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+Fig 14 - Emissions Intensity Ranking-only GDP-EI and Gross
+
+```{r}
+
+fignum = 14
+figdesc = "-Emissions Intensity Ranking-GDP and Gross Only"
+figfmt = global_figfmt
+
+
+hbar_single = function(D, X, Y, FILL,hori_title="Y", vert_title = "X", pal = NULL, facet = NULL, leg_title = NULL, rect_col = NULL){
+  
+  g = ggplot(D, aes_string(X, Y , fill = FILL)) + geom_bar(stat = "identity")
+  g = g + geom_rect(ymin = 0, ymax = +Inf, xmin = -Inf,xmax = +Inf, fill = rect_col, alpha = 0.02)
+  g = g + geom_bar(stat = "identity")
+  g = g + coord_flip()
+  g = g + scale_fill_manual(values = pal, name = leg_title)     
+  g = g + labs(x = vert_title, y = hori_title)
+  g = berl_style(g)
+  g = g + theme(legend.position = "none")
+  g = EI_shade(g)
+  g
+  
+}
+
+
+
+g1 = hbar_single(
+  D = data_for_plot_14 %>% filter(EmIntRank=="High"),
+  X = "Sector",
+  Y = "TCO2e_intensity_AOT",
+  FILL = "EmIntRank",
+  vert_title = "Sector",
+  hori_title = expression(paste("Emissions intensity (kt ",CO[2],"-e / $M GDP)")),
+  pal = berl_pal[c(1)],
+  rect_col = berl_pal[c(1)]
+  
+)
+
+g1 = g1 + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+g1
+
+g2 = hbar_single(
+  D = data_for_plot_14 %>% filter(EmIntRank=="Moderate"),
+  X = "Sector",
+  Y = "TCO2e_intensity_AOT",
+  FILL = "EmIntRank",
+  vert_title = "Sector",
+  hori_title = expression(paste("Emissions intensity (kt ",CO[2],"-e / $M GDP)")),
+  pal = berl_pal[c(2)],
+  rect_col = berl_pal[c(2)]
+  
+)
+g2 = g2 + theme( axis.title.x = element_blank())
+g2
+
+g3 = hbar_single(
+  D = data_for_plot_14 %>% filter(EmIntRank=="Low"),
+  X = "Sector",
+  Y = "TCO2e_intensity_AOT",
+  FILL = "EmIntRank",
+  vert_title = "Sector",
+  hori_title = "Emissions intensity (kt CO2-e / $M GDP)",
+  pal = berl_pal[c(3)],
+  rect_col = berl_pal[c(3)]
+  
+)
+g3 = g3 + ylab(expression(paste("Emissions intensity (kt ",CO[2],"-e / $M GDP)")))
+g3 = g3 + theme(axis.title.y = element_blank())
+g3
+
+g123=plot_grid(g1,g2,g3,ncol = 1, align = "v", rel_heights = c(2,7,7))
+g123
+
+g4 = hbar_single(
+  D = data_for_plot_14 %>% filter(EmIntRank=="High"),
+  X = "Sector",
+  Y = "TCO2e_emissions_TOM ",
+  FILL = "EmIntRank",
+  vert_title = "Sector",
+  hori_title = "Emissions (kt CO2-e)",
+  pal = berl_pal[c(1)],
+  rect_col = berl_pal[c(1)]
+  
+)
+g4 = g4 + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+g4 = g4 + theme(axis.text.y = element_blank())
+g4
+
+g5 = hbar_single(
+  D = data_for_plot_14 %>% filter(EmIntRank=="Moderate"),
+  X = "Sector",
+  Y = "TCO2e_emissions_TOM ",
+  FILL = "EmIntRank",
+  vert_title = "Sector",
+  hori_title = "Emissions (kt CO2-e)",
+  pal = berl_pal[c(2)],
+  rect_col = berl_pal[c(2)]
+  
+)
+g5 = g5 + theme(axis.title.y = element_blank())
+g5 = g5 + theme(axis.text.y = element_blank())
+g5 = g5 + theme(axis.title.x = element_blank())
+g5
+
+g6 = hbar_single(
+  D = data_for_plot_14 %>% filter(EmIntRank=="Low"),
+  X = "Sector",
+  Y = "TCO2e_emissions_TOM",
+  FILL = "EmIntRank",
+  vert_title = "Sector",
+  hori_title = "Emissions (kt CO2-e)",
+  pal = berl_pal[c(3)],
+  rect_col = berl_pal[c(3)]
+  
+)
+g6 = g6 + theme(axis.title.y = element_blank())
+g6 = g6 + theme(axis.text.y = element_blank())
+g6
+
+g6 = g6 + ylab(expression(paste("Gross emissions (kt ",CO[2],"-e)")))
+
+g456 = plot_grid(g4,g5,g6,ncol = 1, align = "v", rel_heights = c(2,7,7))
+
+
+g = plot_grid(g123,g456, ncol=2, rel_widths = c(3,2))
+g
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 22, units = "cm")
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 14 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata = data_for_plot_14
+  
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 15 : M ASSET BASE x SECTOR x OWNER TYPE >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 15 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+D_assets =   read_excel(Assets_ffn,sheet = "Sheet1", range = "B42:F71") %>% 
+  left_join(Berl_Sector_Key, by = c("Sector" = "Industry") ) %>% 
+  group_by(`Reconciled Sector Name`) %>% 
+  dplyr::summarise(across(`Self-employed`:Collectives, ~ sum(.x, na.rm = TRUE))) %>% 
+  dplyr::rename(Sector = `Reconciled Sector Name`) %>% 
+  gather(key,value, `Self-employed`:Collectives) %>% 
+  left_join(Emitting_Level_df, by = "Sector") %>% 
+  dplyr::rename(
+    "Owner Type" = key,
+    "M\u101ori Asset Base ($M)" = value)
+
+
+D_assets$Sector = factor(D_assets$Sector, levels = rev(Emissions_Intensity_order))
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 15 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+Fig 15- Stacked Bar - Breakdown of Asset Base by Sector and Owner Type
+
+```{r}
+
+fignum = 15
+figdesc = "Asset Base by Owner Type"
+# figfmt = ".svg"
+
+
+# D_assets$Sector = factor(D_assets$Sector, levels = rev(RC_Sector_Order))
+
+
+g = ggplot(D_assets, aes(Sector, `Maori Asset Base ($M)`, fill = `Owner Type`))+ geom_bar(stat = "identity", position = "stack") + coord_flip() + labs(y = "M\u101ori Asset Base ($M)")
+
+g = EI_shade(g)
+
+g = g + geom_bar(stat = "identity", position = "stack") + coord_flip() + labs(y = "M\u101ori Asset Base ($M)")
+
+g = g +theme_minimal() + scale_fill_manual(values = berl_pal[c(4,5,6)])
+
+# + facet_grid(.~`Owner Type`, scales = "free_x")
+g
+
+g = berl_style(g)
+g = g + theme(panel.grid.major.x = element_line(color = "dark grey"))
+
+g
+
+
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 22, units = "cm")
+# ggsave(fig_ffn,g)
+
+g
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 15 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata = D_assets
+  
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+
+
+#------------------------
+#-->----<  FIGURE 17 - NZ GDP, M GDP, Percent Share GDP  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 17 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+single_panel_for_fig_17 = T
+
+D$Sector = factor(D$Sector, levels = rev(Emissions_Intensity_order))
+
+if (single_panel_for_fig_17){
+  
+  D_GDP_for_fig = D %>% 
+    select(Sector,GDP_TOM,GDP_AOT,`EML-3T`) %>% 
+    mutate(GDP_NM = GDP_AOT - GDP_TOM) %>% 
+    gather(key,value, GDP_TOM, GDP_NM) %>% 
+    mutate(
+      key = str_replace_all(key, "GDP_TOM", "M\u101ori"),
+      key = str_replace_all(key, "GDP_NM", "Non-M\u101ori"))
+  
+}else{
+  
+  D_GDP_for_fig = D %>% select(Sector,GDP_TOM,GDP_AOT,`EML-3T`) %>% 
+    gather(key,value,GDP_TOM,GDP_AOT,-Sector, -`EML-3T`) %>% 
+    mutate(key = str_replace_all(key,"GDP_TOM", "M\u101ori"),
+           key = str_replace_all(key,"GDP_AOT", "All NZ"))
+  
+  
+  
+  D_M_share_for_fig = D %>% 
+    select(Sector, Maori_Share,`EML-3T`) %>% 
+    mutate(Maori_Share = Maori_Share*100,Non_Maori_Share = 100 - Maori_Share) %>% 
+    gather(key,value, Maori_Share, Non_Maori_Share, -Sector,-`EML-3T`) %>% 
+    mutate(key = str_replace_all(key,"Maori_Share", "M\u101ori"),
+           key = str_replace_all(key,"Non_Maori_Share", "Non-M\u101ori"))
+  
+  
+  D_M_share_for_fig$key = factor(D_M_share_for_fig$key, levels =unique(D_M_share_for_fig$key)[c(2,1)])
+  D_M_share_for_fig$Sector = factor(D_M_share_for_fig$Sector, levels =rev(Emissions_Intensity_order))
+  
+  
+  
+}
+
+
+
+
+
+```
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 17 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+Fig 17 - 3-Tone Maori GDP -
+
+```{r}
+
+
+fignum = 17
+figdesc = "NZ-Maori-GDP-and_Percent Share - ThreeTone"
+
+if (single_panel_for_fig_17){
+  
+  # g = ggplot(D_GDP_for_fig, aes(Sector, value, fill = key))
+  # g = EI_shade(g)
+  # g = g + geom_bar(stat = "identity", color = berl_pal[11], size = .1)
+  # g = g + geom_bar(stat = "identity")
+  # g = g + labs(y = "GDP ($M)")
+  # g = g + coord_flip()
+  # g = g + scale_fill_manual(values = berl_pal[c(1,2)])
+  # g = berl_style(g)
+  # g = g + theme(legend.title = element_blank())
+  # g
+  
+  g = ggplot(D_GDP_for_fig, aes(Sector, value, fill = key)) 
+  
+  g = g + geom_bar(stat = "identity", position = "stack", size = 0.001) + coord_flip() + labs(y = "Number Employees ")+theme_minimal() + scale_fill_manual(values = berl_pal[c(1,2)])
+  
+  
+  g = EI_shade(g)
+  
+  g = g + geom_bar(stat = "identity", position = "stack") + coord_flip() + labs(y = "GDP ($M)")+theme_minimal() + scale_fill_manual(values = berl_pal[c(1,2)])
+  
+  g = berl_style(g)
+  g = g + theme(legend.title = element_blank())
+  
+  
+  
+  g
+  
+}else{
+  
+  
+  g = ggplot(D_GDP_for_fig, aes(Sector, value))
+  g = EI_shade(g)
+  
+  g = g+ geom_bar(stat = "identity", position = "stack", fill=berl_pal[1]) + coord_flip() + labs(y = "GDP ($M)") +theme_minimal() + scale_fill_manual(name = "Emissions\nIntensity\nLevel",values = berl_pal[1])+facet_grid(.~key, scales = "free_x")
+  
+  
+  g = berl_style(g)
+  
+  g = g + theme(panel.grid.major.x = element_line(colour = "darkgrey"), legend.position = c(.9,.7))
+  
+  g
+  
+  
+  
+  
+  
+  g3 = ggplot(D_M_share_for_fig, aes(Sector, value, fill = key)) + geom_bar(stat = "identity", position="stack")
+  g3 = g3 + coord_flip()
+  g3 = g3 + ylab("Percentage Share of GDP")
+  g3 = g3 + scale_fill_manual(values = berl_pal[c(2,1)])
+  g3 = berl_style(g3)
+  g3 = g3 + guides(fill = guide_legend(reverse = T))
+  g3 = g3 + theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+  g3
+  
+  
+  g4 = ggplot(D2, aes(Sector, Maori_Share*100))
+  g4 = EI_shade(g4)
+  g4 = g4 + geom_bar(stat = "identity", fill = berl_pal[1])
+  g4 = g4 + coord_flip()
+  g4 = g4 + ylab("Percentage Share of GDP")
+  
+  g4 = berl_style(g4)
+  g4 = g4 + theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+  g4
+  
+  
+  
+  p = plot_grid(g,g4, nrow=1, rel_widths = c(5,2), align = 'h', axis = 'tb')
+  p
+  
+  g = p
+  
+}
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc, global_figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 24, units = "cm")
+# ggsave(fig_ffn,g,units = "cm")
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 17 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata = D_GDP_for_fig
+  
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+
+#------------------------
+#-->----<  FIGURE 18 : Maori Number in Workforce x Sector x Status  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 18 and 19 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+D2 = D
+D2$Sector = factor(D2$Sector, levels = rev(Emissions_Intensity_order))
+
+
+#read the labels into vectors
+D_empl_skill_eth_labels = read_excel(GDP_Employment_ffn,sheet = "Skill level", range = "C1:AF1", col_names = F) %>% slice(1) %>% unlist(., use.names = F)
+
+D_empl_skill_status_labels = read_excel(GDP_Employment_ffn,sheet = "Skill level", range = "C2:AF2", col_names = F) %>% slice(1) %>% unlist(., use.names = F)
+
+D_empl_skill_skill_level_labels = read_excel(GDP_Employment_ffn,sheet = "Skill level", range = "C3:AF3", col_names = F) %>% slice(1) %>% unlist(., use.names = F)
+
+#combine the lables to create unique column headers
+D_empl_skill_cmb_labels = paste0(D_empl_skill_eth_labels,"_",D_empl_skill_status_labels,"_",D_empl_skill_skill_level_labels)
+
+#read the main data 
+D_empl_data = read_excel(GDP_Employment_ffn,sheet = "Skill level", range = "B4:AF32", col_names = F) 
+
+#apply the combined column headers as header names to the main data
+names(D_empl_data) <- c("Berl_Sector", D_empl_skill_cmb_labels)
+
+#now reaggregate from the berl sectors to the Reconciled Sectors
+D_empl_data_rec26 = D_empl_data %>% 
+  left_join(Berl_Sector_Key, by = c("Berl_Sector" = "Industry"))
+
+
+Emissions_Intensity_Key = readRDS(paste0(datadir, "Emissions_Intensity_Key.rds"))
+
+
+#melt the data (make it into a long form dataframe)
+D_empl_data_lng = D_empl_data_rec26 %>% 
+  select(Sector = `Reconciled Sector Name`, everything()) %>% 
+  select(-Berl_Sector, -levels, -`Reconciled Sector Code`) %>% 
+  gather(key,value, -Sector) %>% 
+  group_by(Sector,key) %>% 
+  dplyr::summarise(Count = sum(value))  %>% 
+  mutate(
+    eth = ifelse(grepl("Non",key),"Non-M\u101ori","M\u101ori"),
+    empl_type = case_when(
+      grepl("Self",key) ~ "Self-Employed",
+      grepl("Employers",key) ~ "Employers",
+      grepl("Employees",key) ~ "Employees"),
+    skill_level = str_sub(key,-1)
+  )  %>% 
+  left_join(Emissions_Intensity_Key, by = "Sector")
+
+
+
+
+D_empl_data_lng$Sector = factor(D_empl_data_lng$Sector, levels = rev(RC_Sector_Order))
+
+
+D_empl_data_lng_Maori_Only = D_empl_data_lng %>% filter(eth == "M\u101ori")
+
+D_empl_data_lng_Maori_Only_high_ems = D_empl_data_lng_Maori_Only %>% filter(EmIntRank=="High")
+D_empl_data_lng_Maori_Only_mod_ems = D_empl_data_lng_Maori_Only %>% filter(EmIntRank=="Moderate")
+D_empl_data_lng_Maori_Only_low_ems = D_empl_data_lng_Maori_Only %>% filter(EmIntRank=="Low")
+
+
+# Absolute Values
+
+D_Employment = D_All_Facets %>% 
+  select(Sector, "M\u101ori" = `Māori employment counts`, "Non-M\u101ori" = `Non-Māori employment counts`, `EML-3T`) %>% 
+  gather(key,value,-Sector, -`EML-3T`) %>% 
+  mutate(value = value/1000) %>% 
+  mutate(key = str_replace_all(key, "Maori", "M\u101ori"))
+
+D_Employment$Sector =factor(D_Employment$Sector, levels = rev(Emissions_Intensity_order))
+
+names(D_All_Facets)
+
+
+# Here is the proportion data that Terry didn't like being displayed as well
+
+D_Employment_propn = D_All_Facets %>% 
+  mutate(`Maori Share` = 100 * (`Māori employment counts`/(`Māori employment counts` + `Non-Māori employment counts`) ) ,
+         `Non-Maori Share` = 100 - `Maori Share` ) %>% 
+  select(Sector,`Maori Share`,`Non-Maori Share`) %>% 
+  gather(key,value,`Maori Share`,`Non-Maori Share`,-Sector)
+
+
+D_Employment_propn$key = factor(D_Employment_propn$key, levels = c("Non-Maori Share","Maori Share"))
+
+# Here is the joined absolute and  proportion data 
+
+D_Employment = D_All_Facets %>% 
+  select(Sector, "M\u101ori" = `Māori employment counts`, "Non-M\u101ori" = `Non-Māori employment counts`, `EML-3T`) %>% 
+  gather(key,value,-Sector, -`EML-3T`) %>% 
+  mutate(value = value/1000) %>% 
+  mutate(key = str_replace_all(key, "Maori", "M\u101ori"))
+
+D_Employment$Sector =factor(D_Employment$Sector, levels = rev(Emissions_Intensity_order))
+
+names(D_All_Facets)
+
+D_Employment_propn = D_All_Facets %>% 
+  mutate(`Maori Share` = 100 * (`Māori employment counts`/(`Māori employment counts` + `Non-Māori employment counts`) ) ,
+         `Non-Maori Share` = 100 - `Maori Share` ) %>% 
+  select(Sector,`Maori Share`,`Non-Maori Share`) %>% 
+  gather(key,value,`Maori Share`,`Non-Maori Share`,-Sector)
+
+D_Employment
+D_Employment_propn$key = factor(D_Employment_propn$key, levels = c("Maori Share","Non-Maori Share"))
+
+D_Employment_propn$Sector =factor(D_Employment_propn$Sector, levels = rev(Emissions_Intensity_order))
+
+
+D_All_Facets_Maori_Only = D_All_Facets %>% select(Sector, contains("M\u101"), -contains("Non-M"),-contains('counts')) %>% 
+  gather(key,value, -Sector) %>% 
+  mutate(key = str_replace_all(key, " M\u101ori", "")) %>% 
+  dplyr::rename(`Employment \nStatus` = key) %>% 
+  left_join(Emitting_Level_df, by = "Sector") 
+
+D_All_Facets_Maori_Only$Sector = factor(D_All_Facets_Maori_Only$Sector, levels = rev(Emissions_Intensity_order))
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 18 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+
+fignum = 18
+figdesc = "Maori-Number-in-Workforce-x-Sector-x-Status"
+
+g = ggplot(D_All_Facets_Maori_Only, aes(Sector, value, fill = `Employment \nStatus`))
+
+
+# g = EI_shade(g)
+
+g = g + geom_bar(stat = "identity", position = "stack") + coord_flip() + labs(y = "Number in Workforce ")+theme_minimal() + scale_fill_manual(values = berl_pal[c(4,5,6)])
+g = berl_style(g)
+g = EI_shade(g)
+# g = g + theme(panel.grid.major.x = element_blank())
+g = g + theme(panel.grid.major.x = element_line(color = "dark grey"))
+
+g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 24, units ="cm")
+
+g
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 18 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata = D_All_Facets_Maori_Only
+  
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+
+
+#------------------------
+#-->----<  FIGURE 19 : Maori Share of Workforce  >-----
+#------------------------
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 19 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+fignum = 19
+figdesc = "-Maori Share of Work force"
+figfmt = global_figfmt
+
+
+add_proportions_to_plot = T
+
+if (!add_proportions_to_plot){
+  
+  g = ggplot(D_Employment, aes(Sector, value, fill = key)) 
+  
+  g = g + geom_bar(stat = "identity", position = "stack", size = 0.001) + coord_flip() + labs(y = "Number Employees ")+theme_minimal() + scale_fill_manual(values = berl_pal[c(1,2)])
+  
+  
+  g = EI_shade(g)
+  
+  g = g + geom_bar(stat = "identity", position = "stack") + coord_flip() + labs(y = "Number Employees ")+theme_minimal() + scale_fill_manual(values = berl_pal[c(1,2)])
+  
+  g = berl_style(g)
+  g = g + theme(legend.title = element_blank())
+  
+  
+  
+  g
+  
+}else{
+  
+  # g1 - Percentage Share Emissions - High emission Sectors
+  
+  include_non_maori_on_proprn_panel = F
+  
+  if (include_non_maori_on_proprn_panel){
+    
+    
+    g1 = ggplot(D_Employment_propn, aes(Sector, value, fill = rev(key))) 
+    g1 = g1 + geom_bar(stat = "identity") + coord_flip()
+    g1 = EI_shade(g1)
+    g1 = g1 + geom_bar(stat = "identity") + coord_flip()
+    g1 = g1 + geom_hline(aes(yintercept = 14.2), color = berl_pal[2], linetype = "dashed", size = 1)
+    g1 = g1 + labs(y = "Share of Workforce (%)")
+    g1 = g1 + scale_fill_manual(values = berl_pal[c(2,1)], labels = c("M\u101ori","Non-M\u101ori"))
+    g1 = berl_style(g1)
+    g1 = g1 + theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+    # g1 = g1 + theme(legend.position = "none")
+    g1
+    
+  }else{
+    
+    
+    
+    D_Employment_propn_M_only =  D_Employment_propn %>% filter(key=="Maori Share")
+    
+    g1 = ggplot(D_Employment_propn_M_only, aes(Sector, value)) 
+    g1 = g1 + geom_bar(stat = "identity", fill = berl_pal[1]) + coord_flip()
+    g1 = EI_shade(g1)
+    g1 = g1 + geom_bar(stat = "identity", fill = berl_pal[1]) + coord_flip()
+    g1 = g1 + geom_hline(aes(yintercept = 14.2), color = berl_pal[9], linetype = "dashed", size = 1)
+    g1 = g1 + labs(y = "Share of workforce (%)")
+    
+    g1 = berl_style(g1)
+    g1 = g1 + theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+    # g1 = g1 + theme(legend.position = "none")
+    g1
+  }
+  
+  
+  include_non_maori_on_absol_panel = F
+  
+  
+  if(include_non_maori_on_absol_panel){
+    
+    
+    # g2 - Absolute  Emissions - High emission Sectors
+    
+    
+    g2 = ggplot(D_Employment, aes(Sector, value, fill = key)) 
+    g2 = g2 + geom_bar(stat = "identity") + coord_flip()
+    # g2 = EI_shade(g2)
+    g2 = g2 + geom_bar(stat = "identity") + coord_flip()
+    g2 = g2 + labs(y = expression(paste("Number employed (thousands)")))
+    g2 = g2 + scale_fill_manual(values = berl_pal[c(1,2)], labels = c("M\u101ori","Non-M\u101ori"))
+    g2 = berl_style(g2)
+    # g2 = g2 + theme(axis.title.x = element_blank(), axis.text.x = element_blank())
+    g2 = g2 + theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+    
+  }else{
+    
+    
+    D_Employment_M_only = D_Employment %>% filter(key=="M\u101ori")
+    
+    g2 = ggplot(D_Employment_M_only, aes(Sector, value)) 
+    g2 = g2 + geom_bar(stat = "identity", fill = berl_pal[1]) + coord_flip()
+    g2 = EI_shade(g2)
+    g2 = g2 + geom_bar(stat = "identity", fill = berl_pal[1]) + coord_flip()
+    g2 = berl_style(g2)
+    # g2 = g2 + theme(axis.title.x = element_blank(), axis.text.x = element_blank())
+    # g2 = g2 + theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+    g2 = g2 + labs(y = expression(paste("Number in workforce (thousands)")))
+    g2
+    
+  }
+  
+  
+  g = ggpubr::ggarrange(g2,g1, ncol = 2,widths = c(4,2), align = "h")
+  g
+  
+}
+
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 24, units = 'cm')
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 19 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  
+  # Both the GDP and the EMissions Intensity data is inside the 
+  # "Emissions_Intensity_by_Rohe_lng" data set
+  
+  figdata_prp = D_Employment_propn_M_only
+  figdata_abs = D_Employment_M_only
+  
+  
+  figdata = figdata_abs %>% 
+    left_join(figdata_prp, by = "Sector") %>% 
+    select(Sector, "Intensity Level" = `EML-3T`, "Number in workforce (thousands)" = value.x, "Share of workforce (%)" = value.y)
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(figdata, xls_out_ffn, sheetName = sheetname,col.names = TRUE, row.names = TRUE, append = T)
+  
+}
+
+
+```
+
+
+
+
+#------------------------
+#-->----<  FIGURE 21 - Proportion of Workforce x Skill>-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 21 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+D_empl_data_lng_maori_only = D_empl_data_lng %>% filter(eth=="M\u101ori")
+# D_empl_data_lng = D_empl_data_lng_maori_only
+
+
+D_empl_data_lng %>% distinct(eth)
+
+D_empl_data_lng_smy = D_empl_data_lng_maori_only %>% 
+  ungroup() %>% 
+  group_by(Sector, skill_level) %>% 
+  summarise(Count = sum(Count)) %>% 
+  mutate(Skill_level_description = 
+           case_when(
+             skill_level=="1" ~ "Skill level 1",
+             skill_level=="2" ~ "Skill level 2",
+             skill_level=="3" ~ "Skill level 3",
+             skill_level=="4" ~ "Skill level 4",
+             skill_level=="5" ~ "Skill level 5"))
+
+
+
+D_empl_data_lng_smy_prpn = D_empl_data_lng_smy %>% 
+  mutate(skill_perc = 100*Count/sum(Count))
+
+D_empl_data_lng_smy_prpn$Skill_level_description = factor(D_empl_data_lng_smy_prpn$Skill_level_description, levels = rev(paste("Skill level", c("5","4","3","2","1"))))
+
+
+D_empl_data_lng_smy_prpn$skill_level = factor(D_empl_data_lng_smy_prpn$skill_level, levels = rev(c("5","4","3","2","1")))
+
+
+
+
+
+pal_skills = berl_pal[c(3,9,12,4,2)]
+
+# g = ggplot(D_empl_data_lng_smy_prpn , aes(Sector, skill_perc, fill = Skill_level_description)  )
+# 
+# g
+
+
+```
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 21 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+
+fignum = 21
+figdesc = "-R4-Maori and Non Maori all status- stack by eth - facet skill level"
+figfmt = global_figfmt
+
+g = ggplot(D_empl_data_lng_smy_prpn , aes(Sector, skill_perc, fill = Skill_level_description)  )
+g = g + geom_bar(stat = "identity")
+g
+
+# g = EI_shade(g)
+
+
+g = g + geom_bar(stat = "identity")
+g
+g = g+coord_flip() + labs(y = "Proportion of Workforce (%)")
+
+# g = g + scale_fill_manual(name = "ANZCO\nSkill Level",values =pal_skills)
+
+g = g + scale_fill_manual(name = "ANZCO\nSkill Level",values =berl_pal[c(1,2,4,5,6)]) 
+g = berl_style(g)
+
+g = g+theme(legend.title = element_blank())
+
+g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 28, units = "cm",  dpi = 600)
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 21 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+    figdata = D_empl_data_lng_smy_prpn %>% 
+     select(Sector, Skill_level_description , Count) %>% 
+     spread(Skill_level_description , Count) %>% 
+     mutate(Sector = as.character(Sector))
+   
+   names(figdata) <- c("Sector", "1", "2", "3", "4", "5")
+     
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(as.data.frame(figdata), xls_out_ffn, sheetName = sheetname, append = T)
+  
+}
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 21a - Proportion of Workforce x Skill>-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 21a Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+D_empl_data_skill_avg = D_empl_data_lng %>% 
+  mutate(skill_level_numeric = as.numeric(skill_level),
+         skill_level_numeric_wtd = skill_level_numeric*Count) %>% 
+  ungroup() %>% 
+  group_by(Sector,eth) %>% 
+  summarise(Sum_empl = sum(Count),
+            skill_level_numeric_wtd_sum = sum(skill_level_numeric_wtd)) %>% 
+  mutate(skill_level_numeric_wtd_mean = skill_level_numeric_wtd_sum/Sum_empl)
+
+D_empl_data_skill_avg_lng = D_empl_data_skill_avg %>% 
+  select(Sector, eth, skill_level_numeric_wtd_mean)
+
+```
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 21a Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+
+fignum = 21
+figdesc = "a-R4-Maori and Non Maori all status- stack by eth - facet skill level"
+figfmt = global_figfmt
+
+g = ggplot(D_empl_data_skill_avg_lng , aes(Sector, skill_level_numeric_wtd_mean      )  )
+g = g + geom_point(aes(color = eth))
+g
+
+g = EI_shade(g)
+
+
+g = g + geom_point(aes(color = eth, shape = eth))
+g
+g = g+coord_flip() + labs(y = "Mean skill level")
+
+g = g + scale_color_manual(values =berl_pal[c(1,3)])
+# g = g + scale_fill_manual(values =berl_pal[c(1,2)])
+
+g = g + scale_fill_manual(name = "ANZCO\nSkill Level",values =berl_pal[c(1,2,4,5,6)], breaks = seq(1,5)) 
+g = berl_style(g)
+
+
+g = g + scale_y_continuous( breaks = seq(1,5), limits = c(0,6))
+
+g = g+theme(legend.title = element_blank())
+
+g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 28, units = "cm",  dpi = 600)
+
+```
+
+
+
+#------------------------
+#-->----<  FIGURE 22 - Proportion of Workforce x Age>-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 22 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+#read the labels into vectors
+D_empl_age_eth_labels = read_excel(GDP_Employment_ffn,sheet = "Age by Ind", range = "C1:N1", col_names = F) %>% slice(1) %>% unlist(., use.names = F)
+
+D_empl_age_age_labels = read_excel(GDP_Employment_ffn,sheet = "Age by Ind", range = "C2:N2", col_names = F) %>% slice(1) %>% unlist(., use.names = F)
+
+
+#combine the lables to create unique column headers
+D_empl_age_cmb_labels = paste0(D_empl_age_eth_labels,"_",D_empl_age_age_labels)
+
+#read the main data 
+D_empl_age_data = read_excel(GDP_Employment_ffn,sheet = "Age by Ind", range = "B3:N31", col_names = F) 
+
+#apply the combined column headers as header names to the main data
+names(D_empl_age_data) <- c("Berl_Sector", D_empl_age_cmb_labels)
+
+#now reaggregate from the berl sectors to the Reconciled Sectors
+D_empl_age_data_rec26 = D_empl_age_data %>% 
+  left_join(Berl_Sector_Key, by = c("Berl_Sector" = "Industry"))
+
+
+
+
+#melt the data (make it into a long form dataframe)
+D_empl_age_data_lng = D_empl_age_data_rec26 %>% 
+  select(Sector = `Reconciled Sector Name`, everything()) %>% 
+  select(-Berl_Sector, -levels, -`Reconciled Sector Code`) %>% 
+  gather(key,value, -Sector) %>% 
+  group_by(Sector,key) %>% 
+  dplyr::summarise(Count = sum(value))  %>% 
+  mutate(
+    eth = ifelse(grepl("Non",key), "Non-M\u101ori","M\u101ori"),
+    age =case_when(
+      grepl("15-24",key) ~ "15-24 years",
+      grepl("25-34",key) ~ "25-34 years",
+      grepl("35-44",key) ~ "35-44 years",
+      grepl("45-54",key) ~ "45-54 years",
+      grepl("55-64",key) ~ "55-64 years",
+      grepl("65",key) ~ "65 years and over")
+  )  
+
+
+ageclasses = unique(D_empl_age_data_lng$age)
+
+young_set = ageclasses[1:2]
+middle_set= ageclasses[3:4]
+older_set = ageclasses[4:6]
+
+
+
+D_empl_age_data_lng_simp = D_empl_age_data_lng %>% 
+  mutate(Age_set = case_when(
+    age %in% young_set ~ "15 - 34 years", 
+    age %in% middle_set ~ "35 - 54 years", 
+    age %in% older_set ~ "55 - 65 years and older"))    %>% 
+  group_by(Sector, eth, Age_set) %>% 
+  summarise(Age_set_total = sum(Count))
+
+
+
+Age_cats_order = unique(D_empl_age_data_lng_simp$Age_set)[c(3,2,1)]
+
+D_empl_age_data_lng_simp$Age_set = factor(D_empl_age_data_lng_simp$Age_set, levels =Age_cats_order )
+
+D_empl_age_data_lng_simp_perc = D_empl_age_data_lng_simp %>% 
+  mutate(Count_Percent = 100 * Age_set_total/sum(Age_set_total))
+
+
+# hbar_stack = function(D, X, Y, FILL, hori_title="Y", vert_title = "X", pal = NULL){
+
+D_empl_age_data_lng_simp_perc$Sector = factor(D_empl_age_data_lng_simp_perc$Sector, levels = rev(Emissions_Intensity_order))
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 22 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+```{r}
+
+
+fignum = 22
+figdesc = "Proportion of Workforce M v NM x Age"
+figfmt = global_figfmt
+
+g = hbar_stack(D_empl_age_data_lng_simp_perc, 
+               "Sector", "Count_Percent", "Age_set", 
+               pal = berl_pal[c(1,2,3)], 
+               facet = ".~eth",
+               hori_title="Proportion of workforce (%)", 
+               vert_title = "Sector",
+               leg_title = "Age")
+
+
+g
+
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 10, height = 6.5)
+
+g
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 22 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+   figdata = D_empl_age_data_lng_simp_perc
+   
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(as.data.frame(figdata), xls_out_ffn, sheetName = sheetname, append = T)
+  
+}
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 23 : M WORKFORCE BY AGE  >-----
+#------------------------
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 23 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+
+
+```{r}
+
+
+GDP_by_Rohe_and_Sector_fig23 = GDP_by_Rohe_and_Sector %>% 
+  select(-ROHE_abbrev) %>% 
+  left_join(ROHE_key, by = c("ROHE" = "ROHE_with_acc")) %>% 
+  left_join(Sector_Abbrev_key, by = "SECTOR_abbrev") %>% 
+  select(ROHE,GDP_TOM, anzsic_descriptor)
+
+
+GDP_by_Rohe_and_Sector_fig23$ROHE = factor(GDP_by_Rohe_and_Sector_fig23$ROHE, levels = rev(ROHE_levels))
+anzsic_order = rev(unique(GDP_by_Rohe_and_Sector_fig23$anzsic_descriptor)[c(1,4,5,2,3,7,6)])
+GDP_by_Rohe_and_Sector_fig23$anzsic_descriptor = factor(GDP_by_Rohe_and_Sector_fig23$anzsic_descriptor, levels = anzsic_order)
+seven_sector_palette = rev(berl_pal[c(1,5,10,12,11,4,6)])
+
+GDP_by_Rohe_and_Sector_fig23_prop = GDP_by_Rohe_and_Sector_fig23 %>% 
+  group_by(ROHE) %>% 
+  mutate(GDP_TOM_percent = 100*GDP_TOM/sum(GDP_TOM))
+
+
+
+dinx = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/berl data/"
+
+dn =paste0(datadir, "berl data/")
+
+fn = "Asset base by Rohe for Andrew.xlsx"
+ffn = paste0(dinx, fn)
+
+D_Asset_Rohe = read_excel(ffn, sheet = "asset base table", range = "A3:S37")
+
+names(D_Asset_Rohe)[1] <- "five_sector_code"
+
+
+five_sector_names = c("Primary","Manufacturing and Construction", "Public and Professional Services", "Retail and Hospitality-related", "Other, incl property")
+
+
+D_Asset_Rohe_smy = D_Asset_Rohe %>% 
+  filter(!is.na(five_sector_code)) %>% 
+  group_by(five_sector_code) %>% 
+  dplyr::summarise(across(`Te Tai Tokerau`:`Not elsewhere included`, ~ sum(.x, na.rm = TRUE))) %>% 
+  mutate(Sector = five_sector_names) %>% 
+  select(Sector, five_sector_code , everything())
+
+D_Asset_Rohe_smy_lng = D_Asset_Rohe_smy %>% gather(key,value, -Sector, -five_sector_code)
+
+
+D_Asset_Rohe_smy_lng$Sector = factor(D_Asset_Rohe_smy_lng$Sector,levels =  five_sector_names)
+
+
+D_Asset_Rohe_smy_lng$key = factor(D_Asset_Rohe_smy_lng$key, levels = rev(DP0012_rohe_order))
+
+D_Asset_Rohe_smy_lng = D_Asset_Rohe_smy_lng %>% filter(!is.na(key))
+
+
+
+
+
+GDP_by_Rohe_and_Sector_fig24 = GDP_by_Rohe_and_Sector %>% 
+  select(-ROHE_abbrev) %>% 
+  left_join(ROHE_key, by = c("ROHE" = "ROHE_with_acc")) %>% 
+  left_join(Sector_Abbrev_key, by = "SECTOR_abbrev") %>% 
+  select(ROHE,GDP_TOM, anzsic_descriptor)
+
+
+
+
+GDP_by_Rohe_and_Sector_fig24$ROHE = factor(GDP_by_Rohe_and_Sector_fig24$ROHE, levels = rev(ROHE_levels))
+anzsic_order = rev(unique(GDP_by_Rohe_and_Sector_fig24$anzsic_descriptor)[c(1,4,5,2,3,7,6)])
+GDP_by_Rohe_and_Sector_fig24$anzsic_descriptor = factor(GDP_by_Rohe_and_Sector_fig24$anzsic_descriptor, levels = anzsic_order)
+seven_sector_palette = rev(berl_pal[c(1,5,10,12,11,4,6)])
+
+GDP_by_Rohe_and_Sector_fig24_prop = GDP_by_Rohe_and_Sector_fig24 %>% 
+  group_by(ROHE) %>% 
+  mutate(GDP_TOM_percent = 100*GDP_TOM/sum(GDP_TOM))
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 23 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+Fig 23 - Maori Workforce Broken Down by Sector and Age 
+
+```{r}
+
+fignum = 23
+figdesc = "Assets by Rohe x Sector "
+
+g = ggplot(D_Asset_Rohe_smy_lng, aes(key, value, fill = Sector)) + geom_bar(stat = "identity", position = "stack")
+
+g = g+ labs(y = "Assets ($M)", x = "Rohe")
+
+g = g + coord_flip()
+
+g = g + scale_fill_manual(values = berl_pal[c(1,12,2,11,6)])
+
+g = berl_style(g)
+
+g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 24, units = "cm")
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 23 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+   figdata = D_Asset_Rohe_smy_lng %>% 
+     select(-five_sector_code ) %>% 
+     spread(key, value)
+   
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(as.data.frame(figdata), xls_out_ffn, sheetName = sheetname, append = T)
+  
+}
+
+
+```
+
+
+
+```{r}
+
+incl_prop = F
+
+
+fignum = 23
+figdesc = "-A-GDP by Rohe x Sector - Share and Absolute"
+# 
+# manufacturing_subsectors = c("Meat Processing","Dairy Processing", "Other Food Manufacturing", "Wood and paper manufacturing", "Fabricated metal products", "Other Manufacturing")
+
+
+
+
+
+g1 = hbar_stack(GDP_by_Rohe_and_Sector_fig24_prop, "ROHE", "GDP_TOM_percent", FILL="anzsic_descriptor", hori_title="Share of GDP", vert_title = "Rohe", pal = seven_sector_palette, facet = NULL, leg_title = "Sector")
+
+if (incl_prop){g1 = g1 + theme(legend.position = "None")}
+
+g1
+
+
+g2 = hbar_stack(GDP_by_Rohe_and_Sector_fig24, "ROHE", "GDP_TOM", FILL="anzsic_descriptor", hori_title="GDP ($M)", vert_title = "Rohe", pal =seven_sector_palette, facet = NULL, leg_title = "Sector")
+
+if (incl_prop){g2 = g2 + theme(axis.text.y= element_blank(), axis.title.y = element_blank())}
+# g2 = g2 + theme(legend.position = "bottom")
+g2
+
+
+if (incl_prop){
+  g = plot_grid(g1,g2, ncol=2, rel_widths = c(3,6))
+}else{
+  g = g2
+}
+
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+# ggsave(fig_ffn,g, width = 22, units = "cm", dpi = 600)
+# ggsave(fig_ffn,g)
+
+ggsave(fig_ffn,g, width = 12, height = 6.5)
+
+g
+
+
+
+```
+
+#------------------------
+#-->----<  FIGURE 24  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 24 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+dinx = "D:/LUCA Team/Land Use Capability Assessments Limited/LUCA team site - Documents/LUCA-A/Projects/2021-04-08-LP0005-BERL-GHGMaoriEconomy/Data/berl data/"
+
+dn =paste0(datadir, "berl data/")
+
+fn = "Asset base by Rohe for Andrew.xlsx"
+ffn = paste0(dinx, fn)
+
+D_Asset_Rohe = read_excel(ffn, sheet = "asset base table", range = "A3:S37")
+
+names(D_Asset_Rohe)[1] <- "five_sector_code"
+
+
+five_sector_names = c("Primary","Manufacturing and Construction", "Public and Professional Services", "Retail and Hospitality-related", "Other, incl property")
+
+
+D_Asset_Rohe_smy = D_Asset_Rohe %>% 
+  filter(!is.na(five_sector_code)) %>% 
+  group_by(five_sector_code) %>% 
+  dplyr::summarise(across(`Te Tai Tokerau`:`Not elsewhere included`, ~ sum(.x, na.rm = TRUE))) %>% 
+  mutate(Sector = five_sector_names) %>% 
+  select(Sector, five_sector_code , everything())
+
+D_Asset_Rohe_smy_lng = D_Asset_Rohe_smy %>% gather(key,value, -Sector, -five_sector_code)
+
+
+D_Asset_Rohe_smy_lng$Sector = factor(D_Asset_Rohe_smy_lng$Sector,levels =  five_sector_names)
+
+
+D_Asset_Rohe_smy_lng$key = factor(D_Asset_Rohe_smy_lng$key, levels = rev(DP0012_rohe_order))
+
+D_Asset_Rohe_smy_lng = D_Asset_Rohe_smy_lng %>% filter(!is.na(key))
+
+
+manufacturing_subsectors = c("Meat Processing","Dairy Processing", "Other Food Manufacturing", "Wood and paper manufacturing", "Fabricated metal products", "Other Manufacturing")
+
+
+
+
+D_Asset_Manufacturing = D_Asset_Rohe %>% 
+  filter(Sector %in% manufacturing_subsectors)
+
+D_Asset_Manufacturing_lng = D_Asset_Manufacturing %>% 
+  select(Sector, `Te Tai Tokerau`:`Waitaha`) %>% 
+  gather(key,value, -Sector ) %>% 
+  group_by(key) %>% 
+  mutate(percent_share = 100*value/sum(value))
+
+D_Asset_Manufacturing_lng$Sector = factor(D_Asset_Manufacturing_lng$Sector, levels = manufacturing_subsectors)
+
+D_Asset_Manufacturing_lng$key = factor(D_Asset_Manufacturing_lng$key, levels = rev(DP0012_rohe_order))
+
+
+D_Asset_Manufacturing_lng=D_Asset_Manufacturing_lng %>% 
+  mutate(
+    Sector = str_replace_all(Sector, "Meat P", "Meat p"),
+    Sector = str_replace_all(Sector, "Dairy P", "Dairy p"),
+    Sector = str_replace_all(Sector, "Other Food M", "Other food m"),
+    Sector = str_replace_all(Sector, "Other M", "Other m")
+  )
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 24 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+fignum = 24
+figdesc = "Manufacturing Asset Base - Subsectors by Rohe"
+
+
+g1 = ggplot(D_Asset_Manufacturing_lng, aes(key, value, fill = Sector)) + geom_bar(stat = "identity", position = "stack")
+
+g1 = g1+ labs(y = "Assets ($M)", x = "Rohe")
+
+g1 = g1 + coord_flip()
+
+g1 = g1 + scale_fill_manual(values = berl_pal[c(1,12,2,11,6,4)])
+
+g1 = berl_style(g1)
+g1 = g1 + theme(legend.position = "none")
+g1
+
+
+g2 = ggplot(D_Asset_Manufacturing_lng, aes(key, percent_share, fill = Sector)) + geom_bar(stat = "identity", position = "stack")
+
+g2 = g2+ labs(y = "Percent of Asset Base", x = "Rohe")
+
+g2 = g2 + coord_flip()
+
+g2 = g2 + scale_fill_manual(values = berl_pal[c(1,12,2,11,6,4)])
+
+g2 = berl_style(g2)
+
+g2 = g2 + theme(axis.text.y = element_blank(), axis.title.y = element_blank())
+
+g2
+
+
+
+g = plot_grid(g1,g2,nrow = 1)
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 22,units = "cm")
+# ggsave(fig_ffn,g)
+
+g
+
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 24 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  figdata = D_Asset_Manufacturing_lng %>% 
+    select(-percent_share) %>% 
+    spread(key, value)
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(as.data.frame(figdata), xls_out_ffn, sheetName = sheetname, append = T)
+  
+}
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 25  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 25 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+AssetBase_by_rohe_ffn = paste0(datadir,"berl data/Asset base by Rohe for Andrew.xlsx")
+
+D_Primary_Assets = read_excel(AssetBase_by_rohe_ffn, range = "B3:T37")  %>% select(Sector,`Te Tai Tokerau`:`Not elsewhere included`)
+
+D_Primary_Assets_lng =D_Primary_Assets %>% 
+  gather(key,value, -Sector)
+
+ROHE_levels_1003 = D_Primary_Assets_lng %>% distinct(key)
+
+
+full_sector_list = D_Primary_Assets_lng %>% distinct(Sector) %>% pull(Sector)
+primary_sector_list = full_sector_list[1:8]
+
+D_Primary_Assets_lng = D_Primary_Assets_lng %>% filter(Sector %in% primary_sector_list)
+
+ROHE_levels_1003 = D_Primary_Assets_lng %>% distinct(key) %>% pull(key)
+
+# ROHE_levels_1003 = c(ROHE_levels_1003, "Not elsewhere included")
+
+D_Primary_Assets_lng %>% distinct(key)
+
+D_Primary_Assets_lng$key = factor(D_Primary_Assets_lng$key, levels = rev(ROHE_levels_1003))
+
+Sector_levels_1003 = (D_Primary_Assets_lng %>% distinct(Sector) %>% pull(Sector))[c(3,4,8,1,2,5,6,7)]
+
+
+D_Primary_Assets_lng$Sector = factor(D_Primary_Assets_lng$Sector, levels = Sector_levels_1003)
+
+D_Primary_Assets_lng = D_Primary_Assets_lng %>% 
+  group_by(key) %>% 
+  mutate(share = 100*value/sum(value))
+
+
+pal_1003 = berl_pal[c(1,6,4,2,11,9,5,8)]
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 25 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+fignum = 25
+figdesc = "Asset Base by Rohe and focus on Primary"
+
+
+g1 = ggplot(D_Primary_Assets_lng, aes(key, value, fill = Sector)) + geom_bar(stat = "identity")
+g1 = g1 + coord_flip()
+g1 = g1 + labs(x ="Sector",  y="Asset Base ($M)")
+g1 = g1 + scale_fill_manual(values = pal_1003)
+g1 = berl_style(g1)
+g1 = g1 + theme(legend.position = "none")
+g1
+
+g2 = ggplot(D_Primary_Assets_lng, aes(key, share, fill = Sector)) + geom_bar(stat = "identity")
+g2 = g2 + coord_flip()
+g2 = g2 + labs(x ="Sector",  y="Percent of Asset Base")
+g2 = g2 + scale_fill_manual(values = pal_1003)
+g2 = berl_style(g2)
+g2 = g2 + theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+g2
+
+
+g = plot_grid(g1,g2,nrow = 1)
+g
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g, width = 22, units = "cm")
+# ggsave(fig_ffn,g)
+
+g
+
+
+```
+
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 24 Write plot data to xls
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+# write the data to the excel file
+
+if (write_results_to_xls){
+  
+  figdata = D_Asset_Manufacturing_lng %>% 
+    select(-percent_share) %>% 
+    spread(key, value)
+  
+  #Write the data for the Maori & NZ Rohe Emissions
+  sheetname = paste0("Fig-",formatC(fignum, width = 2, flag = "0"))
+  write.xlsx(as.data.frame(figdata), xls_out_ffn, sheetName = sheetname, append = T)
+  
+}
+
+
+```
+
+
+#------------------------
+#-->----<  FIGURE 27 - Emission Intensity Metrics  >-----
+#------------------------
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 27 Data Prep
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+exclude_past = F
+
+
+if (exclude_past){
+  D_EmInt_lng_for_plot = D_EmInt_lng %>% 
+    filter(Sector != "Sheep and beef farming" & Sector != "Dairy")
+}else{
+  D_EmInt_lng_for_plot = D_EmInt_lng
+}
+
+
+D_EmInt_lng_for_plot =D_EmInt_lng_for_plot %>% mutate(
+  key = str_replace_all(key, "Assets","Intensity\nby\nAsset Base"),
+  key = str_replace_all(key, "Employers","Intensity\nby no.\n Employers"),
+  key = str_replace_all(key, "Self-Employed","Intensity\nby no.\n Self-Employed"),
+  key = str_replace_all(key, "GDP","Intensity\nby\nGDP"),
+  key = str_replace_all(key, "Emissions","Total\nGross\nEmissions"),
+) 
+
+D_EmInt_lng_for_plot$key = factor(D_EmInt_lng_for_plot$key, 
+                                  levels = c("GDP","Intensity\nby\nGDP",
+                                             "Intensity\nby\nAsset Base",
+                                             "Intensity\nby no.\n Employers",
+                                             "Intensity\nby no.\n Self-Employed",
+                                             "Total\nGross\nEmissions"))
+
+
+
+
+key_unq_val = D_EmInt_lng_for_plot %>% distinct(key) %>% pull(key)
+
+D_EI_1 = D_EmInt_lng_for_plot %>%  filter(key==key_unq_val[1])
+D_EI_2 = D_EmInt_lng_for_plot %>%  filter(key==key_unq_val[2])
+D_EI_1 = D_EmInt_lng_for_plot %>%  filter(key==key_unq_val[1])
+D_EI_1 = D_EmInt_lng_for_plot %>%  filter(key==key_unq_val[1])
+D_EI_1 = D_EmInt_lng_for_plot %>%  filter(key==key_unq_val[1])
+
+
+
+```
+
+#~~~~~~~~~~~~~~~~~~~~~
+# ---> Fig 27 Make Plot
+#~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+
+
+
+fignum = 27
+figdesc = "revised-Emissions Intensity Ranking"
+figfmt = ".svg"
+
+1 = ggplot(D_EmInt_lng_for_plot_int, aes(Sector, value, fill = EmIntRank)) + geom_bar(stat = "identity") +  coord_flip() + facet_grid(.~key, scales = "free_x")
+
+g1
+if (exclude_past){
+  
+  g1 = g1 + scale_fill_manual(
+    name = "Emissions\nIntensity\nLevel",
+    values  = berl_pal[c(2,3)],
+    labels = c("Moderate","Low") )
+  
+}else{
+  
+  g1 = g1 + scale_fill_manual(
+    name = "Emissions\nIntensity\nLevel",
+    values  = berl_pal[c(1,2,3)],
+    labels = c("High","Moderate","Low") )
+}
+
+
+g1= g1 + theme_minimal()
+
+g1 = berl_style(g1)
+g1 = g1 + theme(legend.position = "none",strip.text = element_text(size = 8))
+g1
+
+
+
+
+g2 = ggplot(D_EmInt_lng_for_plot_ems, aes(Sector, value, fill = EmIntRank)) + geom_bar(stat = "identity") +  coord_flip() + facet_grid(.~key, scales = "free_x")
+
+g2 = g2 + labs(y = expression(paste("kt C", O[2],"-e")))
+
+g2 = g2 + theme_minimal()
+
+g2  = g2 + scale_fill_manual(
+  name = "Emissions\nIntensity\nLevel",
+  values  = berl_pal[c(1,2,3)],
+  labels = c("High","Moderate","Low") )
+
+
+g2 = berl_style(g2)
+g2 = g2 + theme(
+  axis.title.y = element_blank(), axis.text.y = element_blank(),
+  strip.text = element_text(size = 8))
+
+g = plot_grid(g1,g2)
+
+g
+
+# D_EmInt_excl_past_lng = D_EmInt_excl_past %>% 
+#   gather(key,value,-Sector)
+
+# 
+# g = ggplot(D_EmInt_excl_past_lng, aes(Sector, value)) + geom_bar(stat = "identity", fill = berl_pal[1]) +  coord_flip() + facet_grid(.~key, scales = "free_x")
+# 
+# g = g + theme_minimal()
+# # g = g + theme(axis.text.x = element_text(angle = 90))
+# g
+
+
+fig_fn = paste0("Fig-", formatC(fignum,width=2, flag = "0"),"-",figdesc,figfmt)
+fig_ffn = paste0(plotdir, fig_fn)
+
+ggsave(fig_ffn,g)
+# ggsave(fig_ffn,g)
+
+
+
+```
+
+###################################################################
+#==================================================================
+#                  END OF PLOTS FOR REPORT
+#==================================================================
+##################################################################
+
+
